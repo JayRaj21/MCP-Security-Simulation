@@ -11,11 +11,17 @@ A demonstration of man-in-the-middle (MITM) vulnerabilities in standard MCP (Mod
 git clone https://github.com/JayRaj21/MCP-Security-Simulation.git
 cd MCP-Security-Simulation
 
-# Run the insecure demo (attacks succeed)
+# Run the MITM demo — insecure (attacks succeed)
 python3 run.py
 
-# Run the secure demo (attacks blocked)
+# Run the MITM demo — secure (attacks blocked)
 python3 run.py --security
+
+# Become the malicious agent — manipulate files interactively (no security)
+python3 run.py --interactive
+
+# Become the malicious agent — with security active (operations blocked)
+python3 run.py --interactive --security
 ```
 
 > **Windows users:** replace `python3` with `python` in all commands.
@@ -50,21 +56,60 @@ The security layer adds **HMAC-SHA256 message signing** to every request and res
 The client connects to the MITM on port 8080, thinking it is the real server.
 ```
 
-## How to toggle security
+## Modes
 
-The `--security` flag is the only switch needed:
+### MITM network demo (default)
+
+Watch automated attack scenarios play out between client, MITM proxy, and server.
 
 ```bash
-python3 run.py              # No signing — all attacks succeed
-python3 run.py --security   # HMAC-SHA256 signing — attacks blocked
+python3 run.py              # attacks succeed
+python3 run.py --security   # attacks blocked
 ```
 
-| Flag | What changes |
-|------|-------------|
-| *(absent)* | No signing anywhere — MITM can freely tamper with everything |
-| `--security` | Client signs requests, server verifies them; server signs responses, client verifies them |
+### Interactive file agent
 
-The MITM proxy **always attempts all attacks** in both modes. The difference is whether the client and server detect and reject them.
+You become the attacker. The `test_files/` directory contains fake MCP server credentials, user records, and logs. Try to steal, modify, or destroy them.
+
+```bash
+python3 run.py --interactive            # no protection — do whatever you want
+python3 run.py --interactive --security # files are HMAC-sealed — writes blocked
+```
+
+**Available commands in interactive mode:**
+
+| Command | Description |
+|---------|-------------|
+| `list` | Show all test files and their integrity status |
+| `read <file>` | Print a file's contents |
+| `modify <file> <content>` | Overwrite a file with new content |
+| `append <file> <content>` | Add a line to a file |
+| `delete <file>` | Delete a file from disk |
+| `status` | Show security mode and HMAC seal status for each file |
+| `help` | Show all commands and attack ideas |
+| `exit` | Leave interactive mode |
+
+**Test files:**
+
+| File | Contents |
+|------|----------|
+| `config.json` | Server config with API keys and database credentials |
+| `user_database.csv` | User records, roles, and API tokens |
+| `secrets.env` | Production credentials and encryption keys |
+| `audit_log.txt` | Access and transaction audit log |
+
+Every time the program starts, any deleted or modified files are automatically restored to their original state.
+
+## How to toggle security
+
+The `--security` flag works the same way in both modes:
+
+| Flag | MITM demo | Interactive file agent |
+|------|-----------|----------------------|
+| *(absent)* | MITM tampers freely, client accepts everything | Files unprotected — modify and delete anything |
+| `--security` | Tampered messages rejected by client/server | Files sealed with HMAC-SHA256 — writes and deletes blocked |
+
+The attacks are always *attempted* — security determines whether they succeed.
 
 ## Security mechanism
 
@@ -90,11 +135,13 @@ HMAC signing guarantees **integrity** (tampering is detected) but not **confiden
 ```
 MCP-Security-Simulation/
 ├── run.py           # One-command launcher (handles venv + deps automatically)
-├── demo.py          # Main demo script — orchestrates all servers and scenarios
+├── demo.py          # Entry point — MITM demo and interactive file agent
 ├── mcp_server.py    # Simulated MCP server (port 8081)
 ├── mitm_proxy.py    # Malicious MITM proxy (port 8080)
-├── mcp_client.py    # MCP client library used by the demo
-├── security.py      # HMAC-SHA256 signing and verification
+├── mcp_client.py    # MCP client library
+├── file_agent.py    # Interactive file manipulation agent
+├── security.py      # HMAC-SHA256 signing and verification (shared by all)
+├── test_files/      # Auto-created — the files you try to attack
 └── requirements.txt
 ```
 

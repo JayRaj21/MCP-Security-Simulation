@@ -5,8 +5,10 @@ Demonstrates how a MITM agent intercepts and manipulates MCP traffic,
 and how HMAC-SHA256 message signing prevents these attacks.
 
 Usage:
-    python demo.py              # Insecure mode — all attacks succeed
-    python demo.py --security   # Secure mode  — attacks are blocked
+    python demo.py                          # MITM demo, insecure
+    python demo.py --security               # MITM demo, secure
+    python demo.py --interactive            # Interactive file agent, insecure
+    python demo.py --interactive --security # Interactive file agent, secure
 
 Architecture:
     Client (this script)
@@ -259,17 +261,33 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  python demo.py              # Show attacks succeeding (no security)\n"
-            "  python demo.py --security   # Show attacks being blocked (HMAC signing)\n"
+            "  python demo.py                          # MITM demo (no security)\n"
+            "  python demo.py --security               # MITM demo (HMAC signing)\n"
+            "  python demo.py --interactive            # Interactive file agent\n"
+            "  python demo.py --interactive --security # Interactive file agent (secure)\n"
         ),
     )
     parser.add_argument(
         "--security",
         action="store_true",
-        help="Enable HMAC-SHA256 message signing to demonstrate attack prevention",
+        help="Enable HMAC-SHA256 signing — blocks attacks in both modes",
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Become the malicious agent — manipulate test files in test_files/",
     )
     args = parser.parse_args()
-    run_demo(security=args.security)
+
+    # Always restore test files to a known-good state on startup
+    from file_agent import restore_test_files
+    restore_test_files(security_enabled=args.security)
+
+    if args.interactive:
+        from file_agent import run_interactive
+        run_interactive(security_enabled=args.security)
+    else:
+        run_demo(security=args.security)
 
 
 if __name__ == "__main__":
