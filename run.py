@@ -3,11 +3,13 @@
 Quick-start launcher for MCP Security Simulation.
 
 Automatically creates a virtual environment, installs dependencies,
-and runs the demo. No manual setup required.
+and runs the program. No manual setup required.
 
 Usage:
-    python3 run.py              # Insecure mode (attacks succeed)
-    python3 run.py --security   # Secure mode  (attacks blocked)
+    python3 run.py              # start (security off)
+    python3 run.py --security   # start with security already enabled
+
+Use the 'toggle' command inside the session to switch security on/off.
 """
 import subprocess
 import sys

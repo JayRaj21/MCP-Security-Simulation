@@ -5,12 +5,11 @@ Simulates an attacker with local access trying to read, modify, and destroy
 MCP-related configuration and data files in the test_files/ directory.
 
 Security OFF — all operations succeed freely.
-Security ON  — write and delete operations are blocked by the same HMAC-SHA256
-               integrity layer used in the network demo. Each file is "sealed"
-               at startup; any modification attempt is detected and rejected.
+Security ON  — write and delete operations are blocked by HMAC-SHA256
+               integrity seals. Use 'toggle' to switch at any time.
 
-On every program startup, deleted or modified test files are restored to their
-original state automatically.
+On every program startup, deleted or modified test files are restored to
+their original state automatically.
 """
 
 import hmac as _hmac
@@ -31,8 +30,8 @@ RESET  = "\033[0m"
 TEST_DIR = Path(__file__).parent / "test_files"
 
 # ─── Reference file content ───────────────────────────────────────────────────
-# These are the "ground truth" versions. Any deleted or modified files are
-# restored to this content on every startup.
+# Ground-truth versions. Any deleted or modified files are restored to this
+# content on every startup.
 
 ORIGINAL_FILES: dict[str, str] = {
     "config.json": json.dumps(
@@ -73,21 +72,20 @@ NAMES = list(ORIGINAL_FILES.keys())
 # ─── HMAC integrity helpers ──────────────────────────────────────────────────
 
 def _file_hmac(content: str) -> str:
-    """Compute HMAC-SHA256 of file content using the shared secret."""
     return _hmac.new(SHARED_SECRET, content.encode("utf-8"), "sha256").hexdigest()
-
 
 def _sig_path(name: str) -> Path:
     return TEST_DIR / f".{name}.sig"
 
-
 def _seal(name: str, content: str) -> None:
-    """Write a HMAC signature alongside a file."""
     _sig_path(name).write_text(_file_hmac(content))
 
+def _unseal(name: str) -> None:
+    sp = _sig_path(name)
+    if sp.exists():
+        sp.unlink()
 
 def _is_sealed(name: str) -> bool:
-    """Return True if the file's current content matches its stored HMAC."""
     path = TEST_DIR / name
     sp   = _sig_path(name)
     if not path.exists() or not sp.exists():
@@ -101,10 +99,7 @@ def _is_sealed(name: str) -> bool:
 # ─── Startup restoration ─────────────────────────────────────────────────────
 
 def restore_test_files(security_enabled: bool) -> None:
-    """
-    Ensure all test files exist and match their original content.
-    Called on every program startup. Also seals files when security is on.
-    """
+    """Restore any missing or modified test files. Seal them if security is on."""
     TEST_DIR.mkdir(exist_ok=True)
     created  = []
     restored = []
@@ -122,6 +117,8 @@ def restore_test_files(security_enabled: bool) -> None:
 
         if security_enabled:
             _seal(name, content)
+        else:
+            _unseal(name)
 
     tag = f"{CYAN}[FILE AGENT]{RESET}"
     if created:
@@ -132,6 +129,33 @@ def restore_test_files(security_enabled: bool) -> None:
         print(f"{tag} All test files intact.")
     if security_enabled:
         print(f"{tag} Files sealed with HMAC-SHA256.")
+    print()
+
+
+# ─── Toggle ──────────────────────────────────────────────────────────────────
+
+def _cmd_toggle(state: dict) -> None:
+    """Flip the security flag and (un)seal all files accordingly."""
+    state["security"] = not state["security"]
+    security = state["security"]
+
+    if security:
+        sealed = []
+        for name in NAMES:
+            path = TEST_DIR / name
+            if path.exists():
+                _seal(name, path.read_text())
+                sealed.append(name)
+        print(f"\n{GREEN}{BOLD}  Security ON — HMAC-SHA256 seals applied.{RESET}")
+        print(f"  Write and delete operations are now blocked.")
+        for name in sealed:
+            print(f"{GREEN}    ✓ {name}{RESET}")
+    else:
+        for name in NAMES:
+            _unseal(name)
+        print(f"\n{RED}{BOLD}  Security OFF — integrity seals removed.{RESET}")
+        print(f"  Files are unprotected. You can freely modify or delete them.")
+
     print()
 
 
@@ -150,8 +174,7 @@ def _cmd_list(security_enabled: bool) -> None:
         content = path.read_text()
         size    = len(content.encode())
         intact  = content == ORIGINAL_FILES[name]
-
-        state = f"{GREEN}intact{RESET}" if intact else f"{YELLOW}modified{RESET}"
+        state   = f"{GREEN}intact{RESET}" if intact else f"{YELLOW}modified{RESET}"
 
         if security_enabled:
             sealed = _is_sealed(name)
@@ -268,12 +291,21 @@ def _cmd_status(security_enabled: bool) -> None:
             else:
                 verdict = f"{RED}✗ signature mismatch — tampered outside CLI{RESET}"
             print(f"  {name:<26} {verdict}")
-        print()
     else:
-        print("  No signatures in use. Any file can be freely modified or deleted.\n")
+        print("  No signatures in use. Any file can be freely modified or deleted.")
+
+    print()
 
 
-_HELP = f"""
+# ─── Main REPL ───────────────────────────────────────────────────────────────
+
+def _help(security_enabled: bool) -> None:
+    toggle_hint = (
+        f"    {BOLD}toggle{RESET}                        turn security {RED}OFF{RESET} — remove HMAC seals"
+        if security_enabled
+        else f"    {BOLD}toggle{RESET}                        turn security {GREEN}ON{RESET}  — apply HMAC seals"
+    )
+    print(f"""
   {BOLD}Commands:{RESET}
     list                          list test files and their status
     read   <file>                 print file contents to screen
@@ -281,8 +313,9 @@ _HELP = f"""
     append <file> <content>       add a line to the end of a file
     delete <file>                 delete a file from disk
     status                        show security mode and file integrity
+{toggle_hint}
     help                          show this message
-    exit                          leave interactive mode
+    exit                          quit
 
   {BOLD}Test files:{RESET}
     {BOLD}config.json{RESET}       server config with API keys and DB credentials
@@ -290,18 +323,23 @@ _HELP = f"""
     {BOLD}secrets.env{RESET}       production credentials and encryption keys
     {BOLD}audit_log.txt{RESET}     access and transaction log
 
-  {BOLD}Attack ideas (try these when security is OFF):{RESET}
+  {BOLD}Attack ideas (try with security OFF):{RESET}
     append audit_log.txt [2024-01-15 13:00:00] TRANSFER user-42 $99999 CONFIRMED
     modify secrets.env JWT_SECRET=attacker_controlled_secret
     delete user_database.csv
     modify config.json {{"server":"attacker.evil","api_key":"stolen"}}
-"""
+""")
 
 
-# ─── Main REPL ───────────────────────────────────────────────────────────────
+def _prompt(security_enabled: bool) -> str:
+    seal = f"{GREEN}SECURE{RESET}" if security_enabled else f"{RED}INSECURE{RESET}"
+    return f"{RED}[ATTACKER | {seal}{RED}]{RESET} > "
+
 
 def run_interactive(security_enabled: bool) -> None:
     """Start the interactive file agent REPL."""
+    state = {"security": security_enabled}
+
     mode_str = (
         f"{GREEN}SECURE (HMAC-SHA256 active){RESET}"
         if security_enabled
@@ -309,32 +347,30 @@ def run_interactive(security_enabled: bool) -> None:
     )
 
     print(f"\n{BOLD}{'═'*65}")
-    print(f"  INTERACTIVE FILE AGENT  —  {mode_str}")
+    print(f"  MCP SECURITY SIMULATION  —  {mode_str}")
     print(f"{'═'*65}{RESET}")
     print()
     print(f"  You are the malicious agent. The test_files/ directory contains")
     print(f"  sensitive MCP server files. Try to read, modify, and delete them.")
+    print(f"  Use {BOLD}toggle{RESET} to switch security on or off at any time.")
     print()
 
     if security_enabled:
-        print(f"  {GREEN}{BOLD}Security is ON.{RESET}")
-        print(f"  Each file is sealed with HMAC-SHA256 using the server's secret key.")
-        print(f"  You can still READ files — but writes and deletes will be blocked.")
-        print(f"  (Signing prevents tampering, not eavesdropping — same as the network demo.)")
+        print(f"  {GREEN}{BOLD}Security is ON.{RESET} Files are HMAC-sealed.")
+        print(f"  You can READ files — but writes and deletes are blocked.")
     else:
-        print(f"  {RED}{BOLD}Security is OFF.{RESET}")
-        print(f"  Files have no integrity protection. You can do whatever you like.")
+        print(f"  {RED}{BOLD}Security is OFF.{RESET} Files are unprotected.")
+        print(f"  You can freely modify or delete anything.")
 
     print()
-    print(f"  Type {BOLD}help{RESET} to see commands and attack ideas.")
+    print(f"  Type {BOLD}help{RESET} to see all commands and attack ideas.")
     print()
 
-    # Restore files at the start of every interactive session
-    restore_test_files(security_enabled)
+    restore_test_files(state["security"])
 
     while True:
         try:
-            raw = input(f"{RED}[ATTACKER]{RESET} > ").strip()
+            raw = input(_prompt(state["security"])).strip()
         except (EOFError, KeyboardInterrupt):
             print()
             break
@@ -342,27 +378,28 @@ def run_interactive(security_enabled: bool) -> None:
         if not raw:
             continue
 
-        # Split into at most 3 parts: cmd  arg1  rest-as-one-string
         parts = raw.split(None, 2)
         cmd   = parts[0].lower()
         args  = parts[1:]
 
         if cmd in ("exit", "quit"):
-            print(f"\n  Exiting interactive mode.\n")
+            print(f"\n  Goodbye.\n")
             break
         elif cmd == "help":
-            print(_HELP)
+            _help(state["security"])
+        elif cmd == "toggle":
+            _cmd_toggle(state)
         elif cmd == "list":
-            _cmd_list(security_enabled)
+            _cmd_list(state["security"])
         elif cmd == "status":
-            _cmd_status(security_enabled)
+            _cmd_status(state["security"])
         elif cmd == "read":
             _cmd_read(args)
         elif cmd == "modify":
-            _cmd_modify(args, security_enabled)
+            _cmd_modify(args, state["security"])
         elif cmd == "append":
-            _cmd_append(args, security_enabled)
+            _cmd_append(args, state["security"])
         elif cmd == "delete":
-            _cmd_delete(args, security_enabled)
+            _cmd_delete(args, state["security"])
         else:
             print(f"  Unknown command '{cmd}'. Type 'help' for available commands.\n")
