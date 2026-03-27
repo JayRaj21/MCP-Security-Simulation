@@ -2,6 +2,28 @@
 
 A demonstration of man-in-the-middle (MITM) vulnerabilities in standard MCP (Model Context Protocol) servers, and how HMAC-SHA256 message signing addresses them.
 
+## Quick Start
+
+**Prerequisites:** Python 3.8 or newer. No other tools needed.
+
+```bash
+# Clone the repo
+git clone https://github.com/JayRaj21/MCP-Security-Simulation.git
+cd MCP-Security-Simulation
+
+# Run the insecure demo (attacks succeed)
+python3 run.py
+
+# Run the secure demo (attacks blocked)
+python3 run.py --security
+```
+
+> **Windows users:** replace `python3` with `python` in all commands.
+
+`run.py` handles everything automatically — it creates a virtual environment and installs dependencies on first run, then launches the demo. No manual setup required.
+
+---
+
 ## What this demonstrates
 
 MCP servers communicate over HTTP without built-in message integrity guarantees. A MITM attacker positioned between the client and server can:
@@ -28,6 +50,22 @@ The security layer adds **HMAC-SHA256 message signing** to every request and res
 The client connects to the MITM on port 8080, thinking it is the real server.
 ```
 
+## How to toggle security
+
+The `--security` flag is the only switch needed:
+
+```bash
+python3 run.py              # No signing — all attacks succeed
+python3 run.py --security   # HMAC-SHA256 signing — attacks blocked
+```
+
+| Flag | What changes |
+|------|-------------|
+| *(absent)* | No signing anywhere — MITM can freely tamper with everything |
+| `--security` | Client signs requests, server verifies them; server signs responses, client verifies them |
+
+The MITM proxy **always attempts all attacks** in both modes. The difference is whether the client and server detect and reject them.
+
 ## Security mechanism
 
 Every message is signed with **HMAC-SHA256** using a shared secret:
@@ -51,37 +89,13 @@ HMAC signing guarantees **integrity** (tampering is detected) but not **confiden
 
 ```
 MCP-Security-Simulation/
-├── demo.py          # Main entry point — orchestrates all servers and scenarios
+├── run.py           # One-command launcher (handles venv + deps automatically)
+├── demo.py          # Main demo script — orchestrates all servers and scenarios
 ├── mcp_server.py    # Simulated MCP server (port 8081)
 ├── mitm_proxy.py    # Malicious MITM proxy (port 8080)
 ├── mcp_client.py    # MCP client library used by the demo
 ├── security.py      # HMAC-SHA256 signing and verification
 └── requirements.txt
-```
-
-## Setup
-
-```bash
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-## Running the demo
-
-**Insecure mode** — all attacks succeed, client accepts tampered data:
-```bash
-python demo.py
-```
-
-**Secure mode** — attacks are blocked, client rejects tampered data:
-```bash
-python demo.py --security
-```
-
-Run both back-to-back to compare the effect of the security layer:
-```bash
-python demo.py && echo "---" && python demo.py --security
 ```
 
 ## Example output
@@ -109,17 +123,6 @@ python demo.py && echo "---" && python demo.py --security
   [CLIENT] Verifying tools/list response signature…
   [BLOCKED] Tool list signature verification FAILED — response was tampered with
 ```
-
-## How to toggle security
-
-The `--security` flag is the only switch needed. It controls:
-
-| Flag | Client signs requests? | Server verifies requests? | Server signs responses? | Client verifies responses? |
-|------|------------------------|---------------------------|-------------------------|----------------------------|
-| *(absent)* | No | No | No | No |
-| `--security` | Yes | Yes | Yes | Yes |
-
-The MITM proxy **always attempts all attacks** in both modes. The difference is whether the client and server detect and reject them.
 
 ## Limitations and next steps
 
