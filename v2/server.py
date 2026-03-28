@@ -2,89 +2,101 @@
 
 Architecture
 ============
-  Data layer   : GitHub REST API  (open-source, read-only, publicly auditable)
-  Transport    : FastMCP (MCP protocol over stdio or HTTP)
+  Data layer   : In-memory FileStore with pre-populated sensitive demo files
+  Transport    : FastMCP (MCP protocol — streamable-http or stdio)
   Auth         : Zero-trust username/password → short-lived session token
-  Confidentiality: AES-256-CBC — unauthenticated callers receive ciphertext only
+  Confidentiality: AES-256-CBC — unauthenticated callers receive ciphertext
   Integrity    : HMAC-SHA256 — authenticated callers can detect file tampering
   Audit        : In-memory log, visible only to authenticated users
+
+Demo files
+==========
+  config.json          Server config with DB credentials and API keys
+  secrets.env          Production environment secrets and cloud keys
+  user_database.csv    User records with hashed passwords and API tokens
+  audit_log.txt        Access and security event log
+  encryption_keys.txt  Key rotation schedule (highest sensitivity)
 
 Zero-trust policy
 =================
   * Every tool call is independently authenticated — no implicit trust, ever.
-  * Any tool invoked without a valid session token is treated as anonymous.
-  * Anonymous callers never receive plaintext content or metadata.
+  * Any call without a valid session token is treated as anonymous.
+  * Anonymous callers receive only AES-256 ciphertext — never plaintext.
   * All access attempts (authenticated or not) are written to the audit log.
   * Authenticated users can query the audit log to see unauthorized attempts.
 
 Quick-start
 ===========
-  Default credentials (change via env vars):
+  Default credentials (override via env vars ADMIN_PASSWORD / VIEWER_PASSWORD):
     admin   / admin123
     viewer  / view456
 
-  1. Call ``authenticate`` to receive a session_token.
+  1. Call authenticate to receive a session_token.
   2. Pass that token to any other tool.
-  3. Call ``get_audit_log(unauthorized_only=True)`` to see intrusion attempts.
-
-  Set GITHUB_REPO, GITHUB_BRANCH, GITHUB_TOKEN, MCP_ENCRYPTION_KEY,
-  ADMIN_PASSWORD, VIEWER_PASSWORD to override defaults.
+  3. Call get_audit_log(unauthorized_only=True) to see intrusion attempts.
 """
 import sys
 import os
 
-# Allow running as ``python v2/server.py`` from the project root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastmcp import FastMCP
 
 from v2.auth import AuthManager
 from v2.audit import AuditLogger
-from v2.api_client import GitHubAPIClient
 from v2.crypto import CryptoManager
+from v2.filestore import FileStore
 from v2.config import (
     USERS,
-    GITHUB_REPO,
-    GITHUB_BRANCH,
-    GITHUB_TOKEN,
     ENCRYPTION_KEY,
     SESSION_DURATION,
 )
 
 # ---------------------------------------------------------------------------
-# Singletons — one instance per server process
+# Singletons
 # ---------------------------------------------------------------------------
-_auth   = AuthManager(USERS, SESSION_DURATION)
-_crypto = CryptoManager(ENCRYPTION_KEY)
-_github = GitHubAPIClient(GITHUB_REPO, GITHUB_BRANCH, GITHUB_TOKEN)
-_audit  = AuditLogger()
+_auth    = AuthManager(USERS, SESSION_DURATION)
+_crypto  = CryptoManager(ENCRYPTION_KEY)
+_store   = FileStore()
+_audit   = AuditLogger()
 
 # ---------------------------------------------------------------------------
 # FastMCP server
 # ---------------------------------------------------------------------------
 mcp = FastMCP(
-    name="Secure File API Server v2",
+    name="Secure File Server v2",
     instructions="""
-Zero-trust MCP server backed by the GitHub REST API.
+Zero-trust MCP server with pre-populated sensitive demo files.
+
+Demo files available:
+  config.json          — server config with DB credentials and API keys
+  secrets.env          — production environment secrets
+  user_database.csv    — user records with password hashes and tokens
+  audit_log.txt        — access and security event log
+  encryption_keys.txt  — encryption key rotation schedule
 
 WORKFLOW
 --------
-1. Call authenticate(username, password) to get a session_token.
-2. Pass session_token to every subsequent tool call.
-3. Without a token, all file content and metadata is AES-256 encrypted
-   and completely uninterpretable.
-4. Call get_audit_log(session_token, unauthorized_only=True) to see
-   all intrusion attempts made without valid credentials.
+1. Call list_files() without a token  →  see AES-256 encrypted filenames
+2. Call read_file("secrets.env")      →  see AES-256 encrypted content
+3. Call authenticate("admin","admin123") to get a session_token
+4. Call list_files(session_token=...) →  see real filenames
+5. Call read_file("secrets.env", session_token=...) →  see plaintext
+6. Call sign("secrets.env", session_token=...) to capture HMAC signature
+7. Call write_file to modify a file, then verify_integrity to detect the change
+8. Call get_audit_log(session_token, unauthorized_only=True) to see intrusions
 
 AVAILABLE TOOLS
 ---------------
   authenticate         — get a session token
   logout               — invalidate your session
-  list_files           — browse repository contents
+  list_files           — list demo files
   read_file            — read a file (plaintext when authenticated)
+  write_file           — overwrite a file (requires authentication)
+  delete_file          — delete a file (requires authentication)
+  reset_files          — restore all files to original content (requires auth)
   verify_integrity     — confirm a file hasn't been tampered with
   get_audit_log        — view access log (auth required)
-  repository_info      — metadata about the data source
 """,
 )
 
@@ -94,11 +106,10 @@ AVAILABLE TOOLS
 # ---------------------------------------------------------------------------
 @mcp.tool()
 def authenticate(username: str, password: str) -> dict:
-    """Obtain a session token by providing valid credentials.
+    """Authenticate with username and password to receive a session token.
 
     The session token must be passed to every other tool call.
-    Sessions expire automatically after 1 hour (configurable via
-    SESSION_DURATION_SECONDS environment variable).
+    Sessions expire automatically after 1 hour.
 
     Default credentials:
         admin  / admin123
@@ -111,13 +122,10 @@ def authenticate(username: str, password: str) -> dict:
             "status": "success",
             "session_token": token,
             "expires_in_seconds": SESSION_DURATION,
-            "message": "Authentication successful. Include session_token in every subsequent call.",
+            "message": "Authentication successful. Pass session_token to every subsequent call.",
         }
     _audit.record(username, False, "authenticate", "session", "invalid credentials")
-    return {
-        "status": "error",
-        "message": "Invalid username or password.",
-    }
+    return {"status": "error", "message": "Invalid username or password."}
 
 
 # ---------------------------------------------------------------------------
@@ -127,194 +135,238 @@ def authenticate(username: str, password: str) -> dict:
 def logout(session_token: str) -> dict:
     """Invalidate the current session token immediately.
 
-    After calling this, the token is permanently revoked and a new session
+    After calling this the token is permanently revoked and a new session
     must be obtained via authenticate.
     """
     session = _auth.verify_session(session_token)
     username = session["username"] if session else None
-    revoked = _auth.invalidate_session(session_token)
-    if revoked and username:
+    if _auth.invalidate_session(session_token) and username:
         _audit.record(username, True, "logout", "session", "success")
         return {"status": "success", "message": "Session invalidated. You are now logged out."}
     return {"status": "error", "message": "Token not found or already expired."}
 
 
 # ---------------------------------------------------------------------------
-# Tool: repository_info
-# ---------------------------------------------------------------------------
-@mcp.tool()
-def repository_info() -> dict:
-    """Return metadata about the GitHub repository used as the data source.
-
-    This is the only tool that does not require authentication, as it reveals
-    no file content.  Access is still logged.
-    """
-    _audit.record(None, False, "repository_info", "repo_metadata", "public")
-    try:
-        info = _github.repo_info()
-        return {"status": "success", "repository": info}
-    except Exception as exc:
-        return {"status": "error", "message": str(exc)}
-
-
-# ---------------------------------------------------------------------------
 # Tool: list_files
 # ---------------------------------------------------------------------------
 @mcp.tool()
-def list_files(path: str = "", session_token: str = "") -> dict:
-    """List files and directories in the GitHub repository.
+def list_files(session_token: str = "") -> dict:
+    """List the demo files on the server.
 
-    Authenticated callers receive real names, paths, sizes, and Git SHAs.
+    Authenticated — real filenames, sizes, and SHA-256 hashes.
+    Unauthenticated — AES-256-CBC encrypted names (computationally uninterpretable).
 
-    Unauthenticated callers receive AES-256-CBC encrypted names and paths.
-    The ciphertext is computationally uninterpretable without the server key,
-    so directory structure cannot be inferred.
-
-    All calls (authenticated or not) are recorded in the audit log.
+    All calls are recorded in the audit log.
     """
     session = _auth.verify_session(session_token) if session_token else None
     username = session["username"] if session else None
     authenticated = session is not None
 
-    try:
-        items = _github.list_contents(path)
-        _audit.record(username, authenticated, "list_files", path or "/", "success")
+    files = _store.list_files()
+    _audit.record(username, authenticated, "list_files", "/", "success")
 
-        if authenticated:
-            return {
-                "status": "success",
-                "authenticated": True,
-                "path": path or "/",
-                "item_count": len(items),
-                "items": items,
-            }
-
-        # Unauthenticated — encrypt all identifying information
-        obfuscated = [
-            {
-                "name": _crypto.encrypt(i["name"]),
-                "path": _crypto.encrypt(i["path"]),
-                "type": "encrypted",
-                "size": "???",
-                "sha": "???",
-            }
-            for i in items
-        ]
+    if authenticated:
         return {
             "status": "success",
-            "authenticated": False,
-            "item_count": len(obfuscated),
-            "items": obfuscated,
-            "notice": (
-                "All metadata is AES-256 encrypted. "
-                "Call authenticate() to view real file information."
-            ),
+            "authenticated": True,
+            "file_count": len(files),
+            "files": files,
         }
 
-    except Exception as exc:
-        _audit.record(username, authenticated, "list_files", path or "/", f"error: {exc}")
-        return {"status": "error", "message": str(exc)}
+    obfuscated = [
+        {
+            "name": _crypto.encrypt(f["name"]),
+            "path": _crypto.encrypt(f["path"]),
+            "type": "encrypted",
+            "size": "???",
+            "sha": "???",
+        }
+        for f in files
+    ]
+    return {
+        "status": "success",
+        "authenticated": False,
+        "file_count": len(obfuscated),
+        "files": obfuscated,
+        "notice": (
+            "All metadata is AES-256 encrypted. "
+            "Call authenticate() to view real file names."
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
 # Tool: read_file
 # ---------------------------------------------------------------------------
 @mcp.tool()
-def read_file(file_path: str, session_token: str = "") -> dict:
-    """Read the content of a file from the GitHub repository.
+def read_file(filename: str, session_token: str = "") -> dict:
+    """Read the content of a demo file.
 
-    Authenticated callers receive:
-      - plaintext content
-      - Git blob SHA (from GitHub)
-      - HMAC-SHA256 signature of the content
+    Authenticated — plaintext content + HMAC-SHA256 signature.
+      Save the hmac_signature and call verify_integrity later to check
+      whether the file has been modified since you read it.
 
-    Save the hmac_signature value and later call verify_integrity() to detect
-    any tampering with the file since it was first read.
-
-    Unauthenticated callers receive:
-      - AES-256-CBC encrypted file path (uninterpretable)
-      - AES-256-CBC encrypted content (uninterpretable)
+    Unauthenticated — AES-256-CBC encrypted content (uninterpretable).
 
     All access attempts are recorded in the audit log.
+
+    Available files:
+      config.json, secrets.env, user_database.csv,
+      audit_log.txt, encryption_keys.txt
     """
     session = _auth.verify_session(session_token) if session_token else None
     username = session["username"] if session else None
     authenticated = session is not None
 
     try:
-        content, sha = _github.read_file(file_path)
-        signature = _crypto.sign(content)
+        content, sha = _store.read_file(filename)
+    except KeyError:
+        _audit.record(username, authenticated, "read_file", filename, "not found")
+        available = ", ".join(_store.all_names())
+        return {"status": "error", "message": f"File not found: '{filename}'. Available: {available}"}
 
-        _audit.record(username, authenticated, "read_file", file_path, "success")
+    signature = _crypto.sign(content)
+    _audit.record(username, authenticated, "read_file", filename, "success")
 
-        if authenticated:
-            return {
-                "status": "success",
-                "authenticated": True,
-                "file_path": file_path,
-                "content": content,
-                "git_sha": sha,
-                "hmac_signature": signature,
-                "integrity_tip": (
-                    "Store hmac_signature and call verify_integrity(file_path, hmac_signature) "
-                    "at any later time to confirm the content has not changed."
-                ),
-            }
-
-        # Unauthenticated — return ciphertext only
+    if authenticated:
         return {
             "status": "success",
-            "authenticated": False,
-            "file_path": _crypto.encrypt(file_path),
-            "content": _crypto.encrypt(content),
-            "notice": (
-                "Content is AES-256-CBC encrypted and uninterpretable without the server key. "
-                "Call authenticate() to read the plaintext."
-            ),
+            "authenticated": True,
+            "filename": filename,
+            "content": content,
+            "sha256": sha,
+            "hmac_signature": signature,
+            "tip": f"Run verify_integrity('{filename}', '{signature[:16]}…') later to detect changes.",
         }
 
-    except Exception as exc:
-        _audit.record(username, authenticated, "read_file", file_path, f"error: {exc}")
-        return {"status": "error", "message": str(exc)}
+    return {
+        "status": "success",
+        "authenticated": False,
+        "filename": _crypto.encrypt(filename),
+        "content": _crypto.encrypt(content),
+        "notice": (
+            "Content is AES-256-CBC encrypted and uninterpretable without the server key. "
+            "Call authenticate() to read the plaintext."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool: write_file
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def write_file(filename: str, content: str, session_token: str) -> dict:
+    """Overwrite a file's content. Requires authentication.
+
+    After writing, any previously captured HMAC signature for this file will
+    no longer match — call verify_integrity to observe the change.
+
+    Unauthenticated write attempts are blocked and logged.
+    """
+    session = _auth.verify_session(session_token)
+    if not session:
+        _audit.record(None, False, "write_file", filename, "denied — not authenticated")
+        return {"status": "error", "message": "Authentication required to write files."}
+
+    new_sha = _store.write_file(filename, content)
+    new_sig = _crypto.sign(content)
+    _audit.record(session["username"], True, "write_file", filename, "success")
+    return {
+        "status": "success",
+        "filename": filename,
+        "sha256": new_sha,
+        "hmac_signature": new_sig,
+        "message": f"File '{filename}' written. Any old HMAC signature is now invalid.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool: delete_file
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def delete_file(filename: str, session_token: str) -> dict:
+    """Delete a demo file. Requires authentication.
+
+    Use reset_files to restore all files to their original content.
+    Unauthenticated delete attempts are blocked and logged.
+    """
+    session = _auth.verify_session(session_token)
+    if not session:
+        _audit.record(None, False, "delete_file", filename, "denied — not authenticated")
+        return {"status": "error", "message": "Authentication required to delete files."}
+
+    try:
+        _store.delete_file(filename)
+    except KeyError:
+        return {"status": "error", "message": f"File not found: '{filename}'"}
+
+    _audit.record(session["username"], True, "delete_file", filename, "success")
+    return {"status": "success", "message": f"File '{filename}' deleted. Run reset_files to restore it."}
+
+
+# ---------------------------------------------------------------------------
+# Tool: reset_files
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def reset_files(session_token: str) -> dict:
+    """Restore all demo files to their original content. Requires authentication.
+
+    Use this after modifying or deleting files to get back to a clean state.
+    """
+    session = _auth.verify_session(session_token)
+    if not session:
+        _audit.record(None, False, "reset_files", "/", "denied — not authenticated")
+        return {"status": "error", "message": "Authentication required to reset files."}
+
+    restored = _store.reset()
+    _audit.record(session["username"], True, "reset_files", "/", f"restored {len(restored)} files")
+    return {
+        "status": "success",
+        "message": "All files restored to original demo content.",
+        "files_restored": restored,
+    }
 
 
 # ---------------------------------------------------------------------------
 # Tool: verify_integrity
 # ---------------------------------------------------------------------------
 @mcp.tool()
-def verify_integrity(file_path: str, expected_hmac: str, session_token: str) -> dict:
+def verify_integrity(filename: str, expected_hmac: str, session_token: str) -> dict:
     """Verify that a file's current content matches a previously captured HMAC signature.
 
-    Re-fetches the file from GitHub, recomputes the HMAC-SHA256, and compares
-    it with expected_hmac using a constant-time comparison to prevent timing attacks.
+    Re-reads the file, recomputes the HMAC-SHA256, and compares using a
+    constant-time comparison to prevent timing attacks.
 
-    Returns whether the file is intact or has been altered.
-    Authentication is required — unauthenticated access attempts are logged.
+    Useful for detecting whether write_file (or any other change) has modified
+    a file since the signature was captured with read_file.
+
+    Requires authentication — attempts without a token are blocked and logged.
     """
     session = _auth.verify_session(session_token)
     if not session:
-        _audit.record(None, False, "verify_integrity", file_path, "denied — not authenticated")
+        _audit.record(None, False, "verify_integrity", filename, "denied — not authenticated")
         return {"status": "error", "message": "Authentication required to verify file integrity."}
 
     try:
-        content, sha = _github.read_file(file_path)
-        intact = _crypto.verify(content, expected_hmac)
-        outcome = "intact" if intact else "TAMPERED"
-        _audit.record(session["username"], True, "verify_integrity", file_path, outcome)
-        return {
-            "status": "success",
-            "file_path": file_path,
-            "git_sha": sha,
-            "intact": intact,
-            "verdict": (
-                "File is intact — content matches the HMAC signature."
-                if intact else
-                "WARNING: Content does NOT match the signature. "
-                "The file may have been tampered with since the signature was captured."
-            ),
-        }
-    except Exception as exc:
-        return {"status": "error", "message": str(exc)}
+        content, sha = _store.read_file(filename)
+    except KeyError:
+        return {"status": "error", "message": f"File not found: '{filename}'"}
+
+    intact = _crypto.verify(content, expected_hmac)
+    outcome = "intact" if intact else "TAMPERED"
+    _audit.record(session["username"], True, "verify_integrity", filename, outcome)
+    return {
+        "status": "success",
+        "filename": filename,
+        "sha256": sha,
+        "intact": intact,
+        "verdict": (
+            "File is intact — content matches the HMAC signature."
+            if intact else
+            "WARNING: Content does NOT match the signature. "
+            "The file has been modified since the signature was captured."
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -327,30 +379,23 @@ def get_audit_log(session_token: str, unauthorized_only: bool = False) -> dict:
     Only authenticated users can view the audit log (zero-trust: the log
     itself is a protected resource).
 
-    Set unauthorized_only=True to filter for non-authenticated access attempts
-    only — this lets you quickly see if anyone tried to access files without
-    credentials (potential intrusion detection).
+    Set unauthorized_only=True to filter for non-authenticated access attempts,
+    so you can see exactly who tried to read files without credentials.
 
-    The audit log captures: timestamp, username, auth status, action,
-    resource accessed, and outcome.
+    The log captures: timestamp, username, auth status, action, resource, outcome.
     """
     session = _auth.verify_session(session_token)
     if not session:
-        _audit.record(
-            None, False, "read_audit_log", "audit_log",
-            "denied — not authenticated"
-        )
+        _audit.record(None, False, "read_audit_log", "audit_log", "denied — not authenticated")
         return {"status": "error", "message": "Authentication required to view the audit log."}
 
-    raw_entries = _audit.get_unauthorized() if unauthorized_only else _audit.get_all()
-    formatted = [_audit.format_entry(e) for e in raw_entries]
+    raw = _audit.get_unauthorized() if unauthorized_only else _audit.get_all()
+    formatted = [_audit.format_entry(e) for e in raw]
 
-    # Log the audit log access itself
     _audit.record(
         session["username"], True, "read_audit_log", "audit_log",
         f"success ({len(formatted)} entries)"
     )
-
     return {
         "status": "success",
         "requested_by": session["username"],
@@ -371,16 +416,15 @@ if __name__ == "__main__":
         "--transport",
         choices=["stdio", "streamable-http"],
         default="streamable-http",
-        help="MCP transport (default: streamable-http for demo)",
     )
-    parser.add_argument("--host", default="127.0.0.1", help="HTTP host (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=8000, help="HTTP port (default: 8000)")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
 
     if args.transport == "streamable-http":
-        print(f"[v2] FastMCP server starting on http://{args.host}:{args.port}/mcp")
-        print("[v2] Default credentials:  admin / admin123   or   viewer / view456")
-        print("[v2] Override via env vars: ADMIN_PASSWORD, VIEWER_PASSWORD, GITHUB_REPO")
+        print(f"[v2] FastMCP server on http://{args.host}:{args.port}/mcp")
+        print("[v2] Demo files: config.json  secrets.env  user_database.csv  audit_log.txt  encryption_keys.txt")
+        print("[v2] Credentials: admin/admin123  or  viewer/view456")
         mcp.run(transport="streamable-http", host=args.host, port=args.port)
     else:
         mcp.run(transport="stdio")
