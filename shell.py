@@ -1,32 +1,27 @@
-"""Interactive security shell for MCP Security Simulation v2.
+"""Interactive security shell for the MCP Security Gateway.
 
-Lets users actively test every security feature against the live FastMCP server.
-
-Demo files pre-loaded on the server:
-  config.json          Server config with DB credentials and API keys
-  secrets.env          Production environment secrets and cloud keys
-  user_database.csv    User records with hashed passwords and API tokens
-  audit_log.txt        Access and security event log
-  encryption_keys.txt  Encryption key rotation schedule
+Connects to the running FastMCP gateway and lets you test every security
+feature against the live JSONPlaceholder backend.
 
 Commands
 --------
-  login / logout                    — manage your session
-  list                              — see files (encrypted vs plaintext)
-  read <file>                       — read a file
-  write <file> <content>            — overwrite a file
-  delete <file>                     — delete a file
-  reset                             — restore all files to original content
-  sign <file>                       — save a file's HMAC signature
-  verify <file>                     — check the file hasn't changed
-  tampertest <file>                 — corrupt the saved signature to trigger detection
-  audit / audit --all               — view access log
-  status / help / exit
+  login / logout / status           — manage your session
+  users                             — list all users (encrypted vs plaintext)
+  user <id>                         — get a single user (1-10)
+  posts [<user_id>]                 — list posts, optionally by user
+  post <id>                         — get a single post (1-100)
+  todos [<user_id>]                 — list todos, optionally by user
+  todo <id>                         — get a single todo (1-200)
+  sign <type> <id>                  — save HMAC signature (e.g. sign user 3)
+  verify <type> <id>                — verify resource hasn't changed
+  tampertest <type> <id>            — corrupt the saved signature to trigger detection
+  audit / audit --all               — view access log (auth required)
+  help / exit
 
 Usage
 -----
-    python v2/shell.py                 # connect to http://127.0.0.1:8000/mcp
-    python v2/shell.py --url http://.. # custom server URL
+    python shell.py                  # connect to http://127.0.0.1:8000/mcp
+    python shell.py --url http://..  # custom server URL
 """
 import argparse
 import asyncio
@@ -38,15 +33,13 @@ from typing import Optional
 from fastmcp import Client
 
 # ── ANSI colours ─────────────────────────────────────────────────────────────
-R = "\033[0m"
-BOLD = "\033[1m"
-DIM = "\033[2m"
-RED = "\033[31m"
-GREEN = "\033[32m"
+R      = "\033[0m"
+BOLD   = "\033[1m"
+DIM    = "\033[2m"
+RED    = "\033[31m"
+GREEN  = "\033[32m"
 YELLOW = "\033[33m"
-CYAN = "\033[36m"
-MAGENTA = "\033[35m"
-WHITE = "\033[97m"
+CYAN   = "\033[36m"
 
 def c(text, *codes): return "".join(codes) + str(text) + R
 def ok(msg):   print(f"  {c('✓', GREEN, BOLD)} {msg}")
@@ -59,9 +52,9 @@ def sep():     print(c("  " + "─" * 66, DIM))
 # ── Shell state ───────────────────────────────────────────────────────────────
 class ShellState:
     def __init__(self):
-        self.token:    Optional[str] = None
-        self.username: Optional[str] = None
-        self.signatures: dict[str, str] = {}  # filename -> saved HMAC
+        self.token:      Optional[str]  = None
+        self.username:   Optional[str]  = None
+        self.signatures: dict[str, str] = {}   # "user:3" → hmac
 
     @property
     def authenticated(self) -> bool:
@@ -73,26 +66,89 @@ class ShellState:
         return f"\n{c('[', DIM)}{c('unauth', YELLOW)}{c(']', DIM)} {c('>', BOLD)} "
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Response helpers ──────────────────────────────────────────────────────────
 def _r(result) -> dict:
     return result.data if isinstance(result.data, dict) else json.loads(result.content[0].text)
 
+def _trunc(text: str, width: int = 70) -> str:
+    return text if len(text) <= width else text[:width] + c(f"… ({len(text)})", DIM)
 
-def _truncate(text: str, width: int = 100) -> str:
-    return text if len(text) <= width else text[:width] + c(f" … ({len(text)} chars)", DIM)
+
+# ── Display helpers ───────────────────────────────────────────────────────────
+def _print_encrypted(blob: str) -> None:
+    warn("AES-256-CBC encrypted — uninterpretable without the key:")
+    print(f"  {c(_trunc(blob, 80), RED)}")
 
 
-def _print_content(content: str, authenticated: bool) -> None:
+def _print_users(users: list) -> None:
+    fmt = "  {:<4} {:<24} {:<30} {}"
+    print(c(fmt.format("ID", "NAME", "EMAIL", "COMPANY"), DIM))
     sep()
-    if not authenticated:
-        warn("AES-256-CBC encrypted — uninterpretable without the key:")
-        print(f"  {c(_truncate(content, 80), RED)}")
-        return
-    lines = content.splitlines()
-    for line in lines[:30]:
-        print(f"  {line}")
-    if len(lines) > 30:
-        info(f"… {len(lines) - 30} more lines (showing first 30)")
+    for u in users:
+        print(fmt.format(
+            c(u["id"], CYAN),
+            u.get("name", "")[:23],
+            u.get("email", "")[:29],
+            u.get("company", {}).get("name", "")[:24],
+        ))
+
+
+def _print_user(u: dict) -> None:
+    addr = u.get("address", {})
+    co   = u.get("company", {})
+    sep()
+    for k, v in [
+        ("id",         u.get("id")),
+        ("name",       u.get("name")),
+        ("username",   u.get("username")),
+        ("email",      u.get("email")),
+        ("phone",      u.get("phone")),
+        ("website",    u.get("website")),
+        ("address",    f"{addr.get('street')}, {addr.get('city')} {addr.get('zipcode')}"),
+        ("company",    co.get("name")),
+        ("catchPhrase",co.get("catchPhrase")),
+    ]:
+        print(f"  {c(k + ':', DIM):<28} {v}")
+
+
+def _print_posts(posts: list) -> None:
+    fmt = "  {:<5} {:<5} {}"
+    print(c(fmt.format("ID", "USER", "TITLE"), DIM))
+    sep()
+    for p in posts[:20]:
+        print(fmt.format(c(p["id"], CYAN), p.get("userId", ""), p.get("title", "")[:55]))
+    if len(posts) > 20:
+        info(f"… {len(posts) - 20} more posts (showing first 20)")
+
+
+def _print_post(p: dict) -> None:
+    sep()
+    print(f"  {c('id:', DIM):<18} {p.get('id')}")
+    print(f"  {c('userId:', DIM):<18} {p.get('userId')}")
+    print(f"  {c('title:', DIM):<18} {p.get('title')}")
+    print(f"  {c('body:', DIM)}")
+    for line in p.get("body", "").splitlines():
+        print(f"    {line}")
+
+
+def _print_todos(todos: list) -> None:
+    fmt = "  {:<5} {:<5} {:<6} {}"
+    print(c(fmt.format("ID", "USER", "DONE", "TITLE"), DIM))
+    sep()
+    for t in todos[:20]:
+        done = c("✓", GREEN) if t.get("completed") else c("✗", RED)
+        print(fmt.format(c(t["id"], CYAN), t.get("userId", ""), done, t.get("title", "")[:52]))
+    if len(todos) > 20:
+        info(f"… {len(todos) - 20} more todos (showing first 20)")
+
+
+def _print_todo(t: dict) -> None:
+    sep()
+    done = c("✓  completed", GREEN) if t.get("completed") else c("✗  not completed", YELLOW)
+    print(f"  {c('id:', DIM):<18} {t.get('id')}")
+    print(f"  {c('userId:', DIM):<18} {t.get('userId')}")
+    print(f"  {c('status:', DIM):<18} {done}")
+    print(f"  {c('title:', DIM):<18} {t.get('title')}")
 
 
 # ── Command handlers ──────────────────────────────────────────────────────────
@@ -101,7 +157,7 @@ async def cmd_login(client, state, args):
         err("Usage: login <username> <password>"); return
     d = _r(await client.call_tool("authenticate", {"username": args[0], "password": args[1]}))
     if d.get("status") == "success":
-        state.token = d["session_token"]
+        state.token    = d["session_token"]
         state.username = args[0]
         ok(f"Authenticated as {c(args[0], GREEN, BOLD)}  (expires in {d.get('expires_in_seconds')}s)")
     else:
@@ -114,126 +170,156 @@ async def cmd_logout(client, state, _args):
     d = _r(await client.call_tool("logout", {"session_token": state.token}))
     if d.get("status") == "success":
         ok(d["message"])
-        state.token = None
-        state.username = None
+        state.token = state.username = None
+        state.signatures.clear()
     else:
         err(d.get("message", "Logout failed"))
 
 
-async def cmd_list(client, state, _args):
-    d = _r(await client.call_tool("list_files", {"session_token": state.token or ""}))
+async def cmd_users(client, state, _args):
+    d = _r(await client.call_tool("list_users", {"session_token": state.token or ""}))
     if d.get("status") == "error":
         err(d["message"]); return
     auth = d.get("authenticated", False)
-    files = d.get("files", [])
-    info(f"authenticated: {c(auth, GREEN if auth else YELLOW)}  |  files: {len(files)}")
+    info(f"resource: {c('/users', CYAN)}  |  authenticated: {c(auth, GREEN if auth else YELLOW)}")
     sep()
     if not auth:
-        warn(d.get("notice", ""))
-        print()
-        for f in files:
-            print(f"  {c('file', DIM):<18}  {c(_truncate(f['name'], 55), RED)}  {c('(encrypted)', DIM)}")
-        return
-    for f in files:
-        sha = f.get("sha", "")[:10]
-        print(
-            f"  {c(f['type'][:3], CYAN):<18}"
-            f"  {c(f['name'], BOLD):<40}"
-            f"  {c(str(f.get('size','')), DIM):<10} B"
-            f"  {c(sha + '…', DIM)}"
-        )
+        _print_encrypted(d.get("data", "")); return
+    _print_users(d.get("data", []))
+    info(f"hmac: {c(d.get('hmac_signature','')[:20], DIM)}…  (run 'sign user <id>' to save a signature)")
 
 
-async def cmd_read(client, state, args):
+async def cmd_user(client, state, args):
     if not args:
-        err("Usage: read <filename>"); return
-    d = _r(await client.call_tool("read_file", {"filename": args[0], "session_token": state.token or ""}))
+        err("Usage: user <id>  (1-10)"); return
+    try:
+        uid = int(args[0])
+    except ValueError:
+        err("user_id must be an integer"); return
+    d = _r(await client.call_tool("get_user", {"user_id": uid, "session_token": state.token or ""}))
     if d.get("status") == "error":
         err(d["message"]); return
     auth = d.get("authenticated", False)
-    info(f"file: {c(args[0], CYAN)}  |  authenticated: {c(auth, GREEN if auth else YELLOW)}")
-    if auth:
-        info(f"sha256: {c(d.get('sha256','')[:16], DIM)}…")
-        info(f"hmac:   {c(d.get('hmac_signature','')[:24], DIM)}…  (run 'sign {args[0]}' to save it)")
-    _print_content(d.get("content", ""), auth)
+    info(f"resource: {c(f'/users/{uid}', CYAN)}  |  authenticated: {c(auth, GREEN if auth else YELLOW)}")
+    if not auth:
+        sep(); _print_encrypted(d.get("data", "")); return
+    _print_user(d.get("data", {}))
+    info(f"hmac: {c(d.get('hmac_signature','')[:20], DIM)}…  (run 'sign user {uid}' to save)")
 
 
-async def cmd_write(client, state, args):
-    if len(args) < 2:
-        err("Usage: write <filename> <new content>"); return
-    filename = args[0]
-    content = " ".join(args[1:])
-    if not state.authenticated:
-        err("Authentication required to write files.")
-        info("Tip: your blocked attempt has been recorded in the audit log."); return
-    d = _r(await client.call_tool("write_file", {
-        "filename": filename, "content": content, "session_token": state.token
-    }))
-    if d.get("status") == "success":
-        ok(d["message"])
-        info(f"new sha256: {c(d.get('sha256','')[:16], DIM)}…")
-        if filename in state.signatures:
-            warn(f"You have a saved signature for '{filename}' — run 'verify {filename}' to see it fail.")
-    else:
-        err(d.get("message", "Write failed"))
+async def cmd_posts(client, state, args):
+    uid = int(args[0]) if args and args[0].isdigit() else 0
+    d = _r(await client.call_tool("list_posts", {"user_id": uid, "session_token": state.token or ""}))
+    if d.get("status") == "error":
+        err(d["message"]); return
+    auth = d.get("authenticated", False)
+    resource = f"/posts?userId={uid}" if uid else "/posts"
+    info(f"resource: {c(resource, CYAN)}  |  authenticated: {c(auth, GREEN if auth else YELLOW)}")
+    sep()
+    if not auth:
+        _print_encrypted(d.get("data", "")); return
+    _print_posts(d.get("data", []))
 
 
-async def cmd_delete(client, state, args):
+async def cmd_post(client, state, args):
     if not args:
-        err("Usage: delete <filename>"); return
-    if not state.authenticated:
-        err("Authentication required to delete files.")
-        info("Tip: your blocked attempt has been recorded in the audit log."); return
-    filename = args[0]
-    d = _r(await client.call_tool("delete_file", {"filename": filename, "session_token": state.token}))
-    if d.get("status") == "success":
-        ok(d["message"])
-        state.signatures.pop(filename, None)
-    else:
-        err(d.get("message", "Delete failed"))
+        err("Usage: post <id>  (1-100)"); return
+    try:
+        pid = int(args[0])
+    except ValueError:
+        err("post_id must be an integer"); return
+    d = _r(await client.call_tool("get_post", {"post_id": pid, "session_token": state.token or ""}))
+    if d.get("status") == "error":
+        err(d["message"]); return
+    auth = d.get("authenticated", False)
+    info(f"resource: {c(f'/posts/{pid}', CYAN)}  |  authenticated: {c(auth, GREEN if auth else YELLOW)}")
+    if not auth:
+        sep(); _print_encrypted(d.get("data", "")); return
+    _print_post(d.get("data", {}))
+    info(f"hmac: {c(d.get('hmac_signature','')[:20], DIM)}…  (run 'sign post {pid}' to save)")
 
 
-async def cmd_reset(client, state, _args):
-    if not state.authenticated:
-        err("Authentication required to reset files."); return
-    d = _r(await client.call_tool("reset_files", {"session_token": state.token}))
-    if d.get("status") == "success":
-        ok(d["message"])
-        for name in d.get("files_restored", []):
-            info(f"  restored: {c(name, CYAN)}")
-        state.signatures.clear()
-    else:
-        err(d.get("message", "Reset failed"))
+async def cmd_todos(client, state, args):
+    uid = int(args[0]) if args and args[0].isdigit() else 0
+    d = _r(await client.call_tool("list_todos", {"user_id": uid, "session_token": state.token or ""}))
+    if d.get("status") == "error":
+        err(d["message"]); return
+    auth = d.get("authenticated", False)
+    resource = f"/todos?userId={uid}" if uid else "/todos"
+    info(f"resource: {c(resource, CYAN)}  |  authenticated: {c(auth, GREEN if auth else YELLOW)}")
+    sep()
+    if not auth:
+        _print_encrypted(d.get("data", "")); return
+    _print_todos(d.get("data", []))
+
+
+async def cmd_todo(client, state, args):
+    if not args:
+        err("Usage: todo <id>  (1-200)"); return
+    try:
+        tid = int(args[0])
+    except ValueError:
+        err("todo_id must be an integer"); return
+    d = _r(await client.call_tool("get_todo", {"todo_id": tid, "session_token": state.token or ""}))
+    if d.get("status") == "error":
+        err(d["message"]); return
+    auth = d.get("authenticated", False)
+    info(f"resource: {c(f'/todos/{tid}', CYAN)}  |  authenticated: {c(auth, GREEN if auth else YELLOW)}")
+    if not auth:
+        sep(); _print_encrypted(d.get("data", "")); return
+    _print_todo(d.get("data", {}))
+    info(f"hmac: {c(d.get('hmac_signature','')[:20], DIM)}…  (run 'sign todo {tid}' to save)")
 
 
 async def cmd_sign(client, state, args):
-    if not args:
-        err("Usage: sign <filename>"); return
+    if len(args) < 2:
+        err("Usage: sign <type> <id>   (type: user | post | todo)"); return
     if not state.authenticated:
-        err("You must be logged in to sign a file."); return
-    d = _r(await client.call_tool("read_file", {"filename": args[0], "session_token": state.token}))
+        err("You must be logged in to sign a resource."); return
+    rtype, rid_str = args[0], args[1]
+    try:
+        rid = int(rid_str)
+    except ValueError:
+        err("id must be an integer"); return
+
+    tool_map = {"user": "get_user", "post": "get_post", "todo": "get_todo"}
+    id_param  = {"user": "user_id",  "post": "post_id",  "todo": "todo_id"}
+    if rtype not in tool_map:
+        err(f"Unknown type '{rtype}'. Use: user, post, todo"); return
+
+    d = _r(await client.call_tool(tool_map[rtype], {id_param[rtype]: rid, "session_token": state.token}))
     if d.get("status") == "error":
         err(d["message"]); return
+
     sig = d.get("hmac_signature", "")
-    state.signatures[args[0]] = sig
-    ok(f"Signature saved for {c(args[0], CYAN)}")
+    key = f"{rtype}:{rid}"
+    state.signatures[key] = sig
+    ok(f"Signature saved for {c(key, CYAN)}")
     info(f"HMAC-SHA256: {c(sig, BOLD)}")
-    info(f"Now try:  write {args[0]} tampered content  →  verify {args[0]}")
+    info(f"Now try:  tampertest {rtype} {rid}  →  verify {rtype} {rid}")
 
 
 async def cmd_verify(client, state, args):
-    if not args:
-        err("Usage: verify <filename>"); return
+    if len(args) < 2:
+        err("Usage: verify <type> <id>   (type: user | post | todo)"); return
     if not state.authenticated:
         err("Authentication required to verify integrity.")
         info("Tip: your blocked attempt has been recorded in the audit log."); return
-    filename = args[0]
-    if filename not in state.signatures:
-        err(f"No saved signature for '{filename}'.  Run: {c('sign ' + filename, YELLOW)}")
+    rtype, rid_str = args[0], args[1]
+    try:
+        rid = int(rid_str)
+    except ValueError:
+        err("id must be an integer"); return
+
+    key = f"{rtype}:{rid}"
+    if key not in state.signatures:
+        err(f"No saved signature for '{key}'.  Run: {c('sign ' + rtype + ' ' + rid_str, YELLOW)}")
         return
+
     d = _r(await client.call_tool("verify_integrity", {
-        "filename": filename,
-        "expected_hmac": state.signatures[filename],
+        "resource_type": rtype,
+        "resource_id":   rid,
+        "expected_hmac": state.signatures[key],
         "session_token": state.token,
     }))
     if d.get("status") == "error":
@@ -245,28 +331,39 @@ async def cmd_verify(client, state, args):
 
 
 async def cmd_tampertest(client, state, args):
-    """Corrupt the saved signature locally to trigger tamper detection."""
-    if not args:
-        err("Usage: tampertest <filename>"); return
+    if len(args) < 2:
+        err("Usage: tampertest <type> <id>   (type: user | post | todo)"); return
     if not state.authenticated:
         err("You must be logged in."); return
-    filename = args[0]
-    if filename not in state.signatures:
-        err(f"No saved signature for '{filename}'.  Run: {c('sign ' + filename, YELLOW)}")
+    rtype, rid_str = args[0], args[1]
+    try:
+        rid = int(rid_str)
+    except ValueError:
+        err("id must be an integer"); return
+
+    key = f"{rtype}:{rid}"
+    if key not in state.signatures:
+        err(f"No saved signature for '{key}'.  Run: {c('sign ' + rtype + ' ' + rid_str, YELLOW)}")
         return
-    original = state.signatures[filename]
+
+    original = state.signatures[key]
     bad = original[:8] + "DEADBEEF" + original[16:]
-    warn(f"Corrupting local signature for {c(filename, CYAN)}:")
-    info(f"  original : {original[:24]}…")
+    warn(f"Corrupting local signature for {c(key, CYAN)}:")
+    info(f"  original:  {original[:24]}…")
     info(f"  corrupted: {bad[:24]}…")
+
     d = _r(await client.call_tool("verify_integrity", {
-        "filename": filename, "expected_hmac": bad, "session_token": state.token
+        "resource_type": rtype,
+        "resource_id":   rid,
+        "expected_hmac": bad,
+        "session_token": state.token,
     }))
     if d.get("intact"):
         warn("Unexpected: check passed with corrupted signature")
     else:
         err(f"Tamper detected!  {d.get('verdict', '')}")
-    state.signatures[filename] = original
+
+    state.signatures[key] = original
     info("Original signature restored.")
 
 
@@ -299,10 +396,10 @@ async def cmd_status(_client, state, _args):
         ok(f"Logged in as {c(state.username, GREEN, BOLD)}")
         if state.signatures:
             info(f"Saved signatures ({len(state.signatures)}):")
-            for filename, sig in state.signatures.items():
-                info(f"  {c(filename, CYAN):<36} {c(sig[:16], DIM)}…")
+            for key, sig in state.signatures.items():
+                info(f"  {c(key, CYAN):<36} {c(sig[:16], DIM)}…")
     else:
-        warn("Not authenticated — all content is AES-256 encrypted")
+        warn("Not authenticated — all responses are AES-256 encrypted")
 
 
 def cmd_help(_c, _s, _a):
@@ -310,50 +407,49 @@ def cmd_help(_c, _s, _a):
   {c('COMMANDS', BOLD + CYAN)}
 
   {c('Authentication', BOLD)}
-    {c('login <user> <pass>', YELLOW)}         Authenticate and open a session
-    {c('logout', YELLOW)}                     End your session
+    {c('login <user> <pass>', YELLOW)}          Authenticate and open a session
+    {c('logout', YELLOW)}                      End your session
 
-  {c('Files', BOLD)}
-    {c('list', YELLOW)}                        List files (encrypted when logged out)
-    {c('read <file>', YELLOW)}                 Read a file's content
-    {c('write <file> <content>', YELLOW)}      Overwrite a file (auth required)
-    {c('delete <file>', YELLOW)}               Delete a file (auth required)
-    {c('reset', YELLOW)}                       Restore all files to original content
+  {c('Resources  (encrypted when logged out)', BOLD)}
+    {c('users', YELLOW)}                        List all 10 users
+    {c('user <id>', YELLOW)}                    Get a single user  (id: 1-10)
+    {c('posts [<user_id>]', YELLOW)}            List posts, optionally filtered by user
+    {c('post <id>', YELLOW)}                    Get a single post  (id: 1-100)
+    {c('todos [<user_id>]', YELLOW)}            List todos, optionally filtered by user
+    {c('todo <id>', YELLOW)}                    Get a single todo  (id: 1-200)
 
   {c('Integrity', BOLD)}
-    {c('sign <file>', YELLOW)}                 Save a file's HMAC-SHA256 signature
-    {c('verify <file>', YELLOW)}               Check the file hasn't changed
-    {c('tampertest <file>', YELLOW)}           Corrupt the signature to trigger detection
+    {c('sign <type> <id>', YELLOW)}             Save a resource HMAC-SHA256 signature
+    {c('verify <type> <id>', YELLOW)}           Re-fetch and verify the HMAC
+    {c('tampertest <type> <id>', YELLOW)}       Corrupt the signature to trigger detection
 
   {c('Audit', BOLD)}
-    {c('audit', YELLOW)}                       Show unauthorized access attempts (auth required)
-    {c('audit --all', YELLOW)}                 Show all access attempts
+    {c('audit', YELLOW)}                        Show unauthorized access attempts
+    {c('audit --all', YELLOW)}                  Show all access attempts
 
   {c('Other', BOLD)}
-    {c('status', YELLOW)}                      Show your session and saved signatures
-    {c('help', YELLOW)}                        Show this message
-    {c('exit', YELLOW)}                        Quit
+    {c('status', YELLOW)}                       Show your session and saved signatures
+    {c('help', YELLOW)}                         Show this message
+    {c('exit', YELLOW)}                         Quit
 
   {c('SUGGESTED FLOWS', BOLD)}
 
   See encryption in action:
-    {c('list', YELLOW)}                       → encrypted filenames
-    {c('read secrets.env', YELLOW)}           → encrypted content
-    {c('login admin admin123', YELLOW)}       → get session
-    {c('list', YELLOW)}  {c('read secrets.env', YELLOW)}  → plaintext
+    {c('users', YELLOW)}                        → encrypted list
+    {c('user 3', YELLOW)}                       → encrypted profile
+    {c('login admin admin123', YELLOW)}         → get session
+    {c('users', YELLOW)}  {c('user 3', YELLOW)}               → plaintext
 
   Test integrity protection:
-    {c('sign config.json', YELLOW)}           → save HMAC
-    {c('verify config.json', YELLOW)}         → intact ✓
-    {c('write config.json HACKED', YELLOW)}   → overwrite it
-    {c('verify config.json', YELLOW)}         → tamper detected ✗
-    {c('reset', YELLOW)}                      → restore original
+    {c('sign user 3', YELLOW)}                  → save HMAC
+    {c('verify user 3', YELLOW)}                → intact ✓
+    {c('tampertest user 3', YELLOW)}            → tamper detected ✗
 
   Test access control:
     {c('logout', YELLOW)}
-    {c('write secrets.env evil', YELLOW)}     → blocked + logged
+    {c('todos 1', YELLOW)}                      → encrypted + logged
     {c('login admin admin123', YELLOW)}
-    {c('audit', YELLOW)}                      → see the blocked attempt
+    {c('audit', YELLOW)}                        → see the unauthorized attempts
     """))
 
 
@@ -361,11 +457,12 @@ def cmd_help(_c, _s, _a):
 COMMANDS = {
     "login":      cmd_login,
     "logout":     cmd_logout,
-    "list":       cmd_list,
-    "read":       cmd_read,
-    "write":      cmd_write,
-    "delete":     cmd_delete,
-    "reset":      cmd_reset,
+    "users":      cmd_users,
+    "user":       cmd_user,
+    "posts":      cmd_posts,
+    "post":       cmd_post,
+    "todos":      cmd_todos,
+    "todo":       cmd_todo,
     "sign":       cmd_sign,
     "verify":     cmd_verify,
     "tampertest": cmd_tampertest,
@@ -374,24 +471,24 @@ COMMANDS = {
     "help":       cmd_help,
 }
 
+
 # ── REPL ──────────────────────────────────────────────────────────────────────
 async def repl(server_url: str) -> None:
     print(f"""
 {c('═' * 70, CYAN)}
-{c('  MCP Security Simulation v2  —  Interactive Shell', BOLD + CYAN)}
+{c('  MCP Security Gateway  —  Interactive Shell', BOLD + CYAN)}
 {c('═' * 70, CYAN)}
 
-  Server : {c(server_url, CYAN)}
+  Gateway : {c(server_url, CYAN)}
+  Backend : {c('https://jsonplaceholder.typicode.com', CYAN)}
 
-  {c('Demo files on the server:', BOLD)}
-    config.json           server config + DB credentials + API keys
-    secrets.env           production environment secrets
-    user_database.csv     user records with password hashes
-    audit_log.txt         security event log
-    encryption_keys.txt   key rotation schedule
+  {c('Resources proxied through the gateway:', BOLD)}
+    users   — 10 users with contact details, addresses, and companies
+    posts   — 100 blog posts across all users
+    todos   — 200 tasks across all users
 
   {c('Type  help  to see all commands.', DIM)}
-  {c('Quick start:  list  →  read secrets.env  →  login admin admin123  →  repeat', DIM)}
+  {c('Quick start:  users  →  user 1  →  login admin admin123  →  repeat', DIM)}
 """)
 
     async with Client(server_url) as client:
@@ -426,7 +523,7 @@ async def repl(server_url: str) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="MCP Security Simulation v2 interactive shell")
+    parser = argparse.ArgumentParser(description="MCP Security Gateway interactive shell")
     parser.add_argument("--url", default="http://127.0.0.1:8000/mcp")
     args = parser.parse_args()
     asyncio.run(repl(args.url))

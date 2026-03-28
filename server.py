@@ -1,29 +1,28 @@
-"""MCP Security Simulation v2 — FastMCP Server.
+"""MCP Security Gateway — FastMCP server proxying the JSONPlaceholder API.
 
 Architecture
 ============
-  Data layer   : In-memory FileStore with pre-populated sensitive demo files
+  Backend      : JSONPlaceholder REST API (jsonplaceholder.typicode.com)
   Transport    : FastMCP (MCP protocol — streamable-http or stdio)
   Auth         : Zero-trust username/password → short-lived session token
   Confidentiality: AES-256-CBC — unauthenticated callers receive ciphertext
-  Integrity    : HMAC-SHA256 — authenticated callers can detect file tampering
-  Audit        : In-memory log, visible only to authenticated users
+  Integrity    : HMAC-SHA256 — authenticated callers can verify response integrity
+  Audit        : In-memory circular buffer, visible only to authenticated users
 
-Demo files
-==========
-  config.json          Server config with DB credentials and API keys
-  secrets.env          Production environment secrets and cloud keys
-  user_database.csv    User records with hashed passwords and API tokens
-  audit_log.txt        Access and security event log
-  encryption_keys.txt  Key rotation schedule (highest sensitivity)
+Gateway Pattern
+===============
+  Every resource tool call:
+    1. Independently verifies the session token (zero-trust, no implicit trust)
+    2. Fetches live data from the JSONPlaceholder backend API
+    3. Authenticated   → returns plaintext JSON + HMAC-SHA256 signature
+       Unauthenticated → returns AES-256-CBC encrypted blob
+    4. Records the access attempt in the audit log
 
-Zero-trust policy
-=================
-  * Every tool call is independently authenticated — no implicit trust, ever.
-  * Any call without a valid session token is treated as anonymous.
-  * Anonymous callers receive only AES-256 ciphertext — never plaintext.
-  * All access attempts (authenticated or not) are written to the audit log.
-  * Authenticated users can query the audit log to see unauthorized attempts.
+Available Resources (proxied from JSONPlaceholder)
+===================================================
+  users   — 10 users with contact details, addresses, and company info
+  posts   — 100 blog posts (10 per user)
+  todos   — 200 tasks (20 per user)
 
 Quick-start
 ===========
@@ -32,9 +31,10 @@ Quick-start
     viewer  / view456
 
   1. Call authenticate to receive a session_token.
-  2. Pass that token to any other tool.
-  3. Call get_audit_log(unauthorized_only=True) to see intrusion attempts.
+  2. Pass that token to any resource tool.
+  3. Call get_audit_log(session_token, unauthorized_only=True) to see intrusions.
 """
+import json
 import sys
 import os
 
@@ -45,58 +45,86 @@ from fastmcp import FastMCP
 from auth import AuthManager
 from audit import AuditLogger
 from crypto import CryptoManager
-from filestore import FileStore
-from config import (
-    USERS,
-    ENCRYPTION_KEY,
-    SESSION_DURATION,
-)
+from backend import BackendAPI
+from config import USERS, ENCRYPTION_KEY, SESSION_DURATION
 
 # ---------------------------------------------------------------------------
 # Singletons
 # ---------------------------------------------------------------------------
 _auth    = AuthManager(USERS, SESSION_DURATION)
 _crypto  = CryptoManager(ENCRYPTION_KEY)
-_store   = FileStore()
+_backend = BackendAPI()
 _audit   = AuditLogger()
 
+
 # ---------------------------------------------------------------------------
-# FastMCP server
+# Gateway envelope helper
+# ---------------------------------------------------------------------------
+def _respond(resource: str, data, session, username) -> dict:
+    """Wrap backend data in the auth-appropriate response envelope.
+
+    Authenticated   → plaintext data + HMAC-SHA256 signature.
+    Unauthenticated → AES-256-CBC encrypted JSON blob, uninterpretable.
+    """
+    json_str = json.dumps(data, ensure_ascii=False)
+    signature = _crypto.sign(json_str)
+
+    if session:
+        return {
+            "status": "success",
+            "authenticated": True,
+            "resource": resource,
+            "data": data,
+            "hmac_signature": signature,
+        }
+
+    return {
+        "status": "success",
+        "authenticated": False,
+        "resource": resource,
+        "data": _crypto.encrypt(json_str),
+        "notice": (
+            "Response is AES-256-CBC encrypted. "
+            "Call authenticate() to receive plaintext data."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# FastMCP gateway
 # ---------------------------------------------------------------------------
 mcp = FastMCP(
-    name="Secure File Server v2",
+    name="MCP Security Gateway",
     instructions="""
-Zero-trust MCP server with pre-populated sensitive demo files.
+Zero-trust MCP gateway that proxies the JSONPlaceholder REST API.
 
-Demo files available:
-  config.json          — server config with DB credentials and API keys
-  secrets.env          — production environment secrets
-  user_database.csv    — user records with password hashes and tokens
-  audit_log.txt        — access and security event log
-  encryption_keys.txt  — encryption key rotation schedule
+Every request is independently authenticated. Unauthenticated callers receive
+AES-256-CBC ciphertext. Authenticated callers receive plaintext + HMAC signatures.
+All access attempts are recorded in the audit log.
 
 WORKFLOW
 --------
-1. Call list_files() without a token  →  see AES-256 encrypted filenames
-2. Call read_file("secrets.env")      →  see AES-256 encrypted content
-3. Call authenticate("admin","admin123") to get a session_token
-4. Call list_files(session_token=...) →  see real filenames
-5. Call read_file("secrets.env", session_token=...) →  see plaintext
-6. Call sign("secrets.env", session_token=...) to capture HMAC signature
-7. Call write_file to modify a file, then verify_integrity to detect the change
-8. Call get_audit_log(session_token, unauthorized_only=True) to see intrusions
+1. Call list_users() without a token        → see encrypted user list
+2. Call get_user(1) without a token         → see encrypted user data
+3. Call authenticate("admin", "admin123")   → get session_token
+4. Call list_users(session_token=...)       → see real user data
+5. Call get_user(3, session_token=...)      → see full user profile
+6. Call list_posts(user_id=3, ...)          → see that user's posts
+7. Call verify_integrity to confirm a response hasn't changed
+8. Call get_audit_log(session_token, unauthorized_only=True) → see intrusions
 
 AVAILABLE TOOLS
 ---------------
-  authenticate         — get a session token
-  logout               — invalidate your session
-  list_files           — list demo files
-  read_file            — read a file (plaintext when authenticated)
-  write_file           — overwrite a file (requires authentication)
-  delete_file          — delete a file (requires authentication)
-  reset_files          — restore all files to original content (requires auth)
-  verify_integrity     — confirm a file hasn't been tampered with
-  get_audit_log        — view access log (auth required)
+  authenticate      — get a session token
+  logout            — invalidate your session
+  list_users        — list all users from the backend API
+  get_user          — fetch a single user by ID (1-10)
+  list_posts        — list posts, optionally filtered by user ID
+  get_post          — fetch a single post by ID (1-100)
+  list_todos        — list todos, optionally filtered by user ID
+  get_todo          — fetch a single todo by ID (1-200)
+  verify_integrity  — re-fetch a resource and verify its HMAC signature
+  get_audit_log     — view the access log (authentication required)
 """,
 )
 
@@ -108,7 +136,7 @@ AVAILABLE TOOLS
 def authenticate(username: str, password: str) -> dict:
     """Authenticate with username and password to receive a session token.
 
-    The session token must be passed to every other tool call.
+    The session token must be passed to every subsequent tool call.
     Sessions expire automatically after 1 hour.
 
     Default credentials:
@@ -122,7 +150,7 @@ def authenticate(username: str, password: str) -> dict:
             "status": "success",
             "session_token": token,
             "expires_in_seconds": SESSION_DURATION,
-            "message": "Authentication successful. Pass session_token to every subsequent call.",
+            "message": "Authentication successful.",
         }
     _audit.record(username, False, "authenticate", "session", "invalid credentials")
     return {"status": "error", "message": "Invalid username or password."}
@@ -142,229 +170,220 @@ def logout(session_token: str) -> dict:
     username = session["username"] if session else None
     if _auth.invalidate_session(session_token) and username:
         _audit.record(username, True, "logout", "session", "success")
-        return {"status": "success", "message": "Session invalidated. You are now logged out."}
+        return {"status": "success", "message": "Session invalidated."}
     return {"status": "error", "message": "Token not found or already expired."}
 
 
 # ---------------------------------------------------------------------------
-# Tool: list_files
+# Tool: list_users
 # ---------------------------------------------------------------------------
 @mcp.tool()
-def list_files(session_token: str = "") -> dict:
-    """List the demo files on the server.
+def list_users(session_token: str = "") -> dict:
+    """List all users from the backend API.
 
-    Authenticated — real filenames, sizes, and SHA-256 hashes.
-    Unauthenticated — AES-256-CBC encrypted names (computationally uninterpretable).
+    Authenticated   — full plaintext user records (name, email, address, company)
+                      plus HMAC-SHA256 signature of the response.
+    Unauthenticated — AES-256-CBC encrypted user list (uninterpretable).
 
     All calls are recorded in the audit log.
     """
     session = _auth.verify_session(session_token) if session_token else None
     username = session["username"] if session else None
-    authenticated = session is not None
 
-    files = _store.list_files()
-    _audit.record(username, authenticated, "list_files", "/", "success")
+    try:
+        data = _backend.list_users()
+    except Exception as e:
+        _audit.record(username, session is not None, "list_users", "/users", f"backend error: {e}")
+        return {"status": "error", "message": f"Backend API error: {e}"}
 
-    if authenticated:
-        return {
-            "status": "success",
-            "authenticated": True,
-            "file_count": len(files),
-            "files": files,
-        }
-
-    obfuscated = [
-        {
-            "name": _crypto.encrypt(f["name"]),
-            "path": _crypto.encrypt(f["path"]),
-            "type": "encrypted",
-            "size": "???",
-            "sha": "???",
-        }
-        for f in files
-    ]
-    return {
-        "status": "success",
-        "authenticated": False,
-        "file_count": len(obfuscated),
-        "files": obfuscated,
-        "notice": (
-            "All metadata is AES-256 encrypted. "
-            "Call authenticate() to view real file names."
-        ),
-    }
+    _audit.record(username, session is not None, "list_users", "/users", "success")
+    return _respond("/users", data, session, username)
 
 
 # ---------------------------------------------------------------------------
-# Tool: read_file
+# Tool: get_user
 # ---------------------------------------------------------------------------
 @mcp.tool()
-def read_file(filename: str, session_token: str = "") -> dict:
-    """Read the content of a demo file.
+def get_user(user_id: int, session_token: str = "") -> dict:
+    """Fetch a single user by ID (1-10) from the backend API.
 
-    Authenticated — plaintext content + HMAC-SHA256 signature.
-      Save the hmac_signature and call verify_integrity later to check
-      whether the file has been modified since you read it.
-
-    Unauthenticated — AES-256-CBC encrypted content (uninterpretable).
-
-    All access attempts are recorded in the audit log.
-
-    Available files:
-      config.json, secrets.env, user_database.csv,
-      audit_log.txt, encryption_keys.txt
+    Authenticated   — full user profile (name, email, phone, address, company)
+                      plus HMAC-SHA256 signature.
+    Unauthenticated — AES-256-CBC encrypted user data.
     """
     session = _auth.verify_session(session_token) if session_token else None
     username = session["username"] if session else None
-    authenticated = session is not None
+    resource = f"/users/{user_id}"
 
     try:
-        content, sha = _store.read_file(filename)
-    except KeyError:
-        _audit.record(username, authenticated, "read_file", filename, "not found")
-        available = ", ".join(_store.all_names())
-        return {"status": "error", "message": f"File not found: '{filename}'. Available: {available}"}
+        data = _backend.get_user(user_id)
+    except Exception as e:
+        _audit.record(username, session is not None, "get_user", resource, f"error: {e}")
+        return {"status": "error", "message": f"Backend API error: {e}"}
 
-    signature = _crypto.sign(content)
-    _audit.record(username, authenticated, "read_file", filename, "success")
-
-    if authenticated:
-        return {
-            "status": "success",
-            "authenticated": True,
-            "filename": filename,
-            "content": content,
-            "sha256": sha,
-            "hmac_signature": signature,
-            "tip": f"Run verify_integrity('{filename}', '{signature[:16]}…') later to detect changes.",
-        }
-
-    return {
-        "status": "success",
-        "authenticated": False,
-        "filename": _crypto.encrypt(filename),
-        "content": _crypto.encrypt(content),
-        "notice": (
-            "Content is AES-256-CBC encrypted and uninterpretable without the server key. "
-            "Call authenticate() to read the plaintext."
-        ),
-    }
+    _audit.record(username, session is not None, "get_user", resource, "success")
+    return _respond(resource, data, session, username)
 
 
 # ---------------------------------------------------------------------------
-# Tool: write_file
+# Tool: list_posts
 # ---------------------------------------------------------------------------
 @mcp.tool()
-def write_file(filename: str, content: str, session_token: str) -> dict:
-    """Overwrite a file's content. Requires authentication.
+def list_posts(user_id: int = 0, session_token: str = "") -> dict:
+    """List posts from the backend API, optionally filtered by user.
 
-    After writing, any previously captured HMAC signature for this file will
-    no longer match — call verify_integrity to observe the change.
+    user_id=0 (default) returns all 100 posts.
+    user_id=1..10 returns the 10 posts belonging to that user.
 
-    Unauthenticated write attempts are blocked and logged.
+    Authenticated   — full plaintext post list + HMAC signature.
+    Unauthenticated — AES-256-CBC encrypted response.
     """
-    session = _auth.verify_session(session_token)
-    if not session:
-        _audit.record(None, False, "write_file", filename, "denied — not authenticated")
-        return {"status": "error", "message": "Authentication required to write files."}
-
-    new_sha = _store.write_file(filename, content)
-    new_sig = _crypto.sign(content)
-    _audit.record(session["username"], True, "write_file", filename, "success")
-    return {
-        "status": "success",
-        "filename": filename,
-        "sha256": new_sha,
-        "hmac_signature": new_sig,
-        "message": f"File '{filename}' written. Any old HMAC signature is now invalid.",
-    }
-
-
-# ---------------------------------------------------------------------------
-# Tool: delete_file
-# ---------------------------------------------------------------------------
-@mcp.tool()
-def delete_file(filename: str, session_token: str) -> dict:
-    """Delete a demo file. Requires authentication.
-
-    Use reset_files to restore all files to their original content.
-    Unauthenticated delete attempts are blocked and logged.
-    """
-    session = _auth.verify_session(session_token)
-    if not session:
-        _audit.record(None, False, "delete_file", filename, "denied — not authenticated")
-        return {"status": "error", "message": "Authentication required to delete files."}
+    session = _auth.verify_session(session_token) if session_token else None
+    username = session["username"] if session else None
+    resource = f"/posts?userId={user_id}" if user_id else "/posts"
 
     try:
-        _store.delete_file(filename)
-    except KeyError:
-        return {"status": "error", "message": f"File not found: '{filename}'"}
+        data = _backend.list_posts(user_id or None)
+    except Exception as e:
+        _audit.record(username, session is not None, "list_posts", resource, f"error: {e}")
+        return {"status": "error", "message": f"Backend API error: {e}"}
 
-    _audit.record(session["username"], True, "delete_file", filename, "success")
-    return {"status": "success", "message": f"File '{filename}' deleted. Run reset_files to restore it."}
+    _audit.record(username, session is not None, "list_posts", resource, "success")
+    return _respond(resource, data, session, username)
 
 
 # ---------------------------------------------------------------------------
-# Tool: reset_files
+# Tool: get_post
 # ---------------------------------------------------------------------------
 @mcp.tool()
-def reset_files(session_token: str) -> dict:
-    """Restore all demo files to their original content. Requires authentication.
+def get_post(post_id: int, session_token: str = "") -> dict:
+    """Fetch a single post by ID (1-100) from the backend API.
 
-    Use this after modifying or deleting files to get back to a clean state.
+    Authenticated   — full post content (title, body) + HMAC signature.
+    Unauthenticated — AES-256-CBC encrypted post data.
     """
-    session = _auth.verify_session(session_token)
-    if not session:
-        _audit.record(None, False, "reset_files", "/", "denied — not authenticated")
-        return {"status": "error", "message": "Authentication required to reset files."}
+    session = _auth.verify_session(session_token) if session_token else None
+    username = session["username"] if session else None
+    resource = f"/posts/{post_id}"
 
-    restored = _store.reset()
-    _audit.record(session["username"], True, "reset_files", "/", f"restored {len(restored)} files")
-    return {
-        "status": "success",
-        "message": "All files restored to original demo content.",
-        "files_restored": restored,
-    }
+    try:
+        data = _backend.get_post(post_id)
+    except Exception as e:
+        _audit.record(username, session is not None, "get_post", resource, f"error: {e}")
+        return {"status": "error", "message": f"Backend API error: {e}"}
+
+    _audit.record(username, session is not None, "get_post", resource, "success")
+    return _respond(resource, data, session, username)
+
+
+# ---------------------------------------------------------------------------
+# Tool: list_todos
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def list_todos(user_id: int = 0, session_token: str = "") -> dict:
+    """List todos from the backend API, optionally filtered by user.
+
+    user_id=0 (default) returns all 200 todos.
+    user_id=1..10 returns the 20 todos belonging to that user.
+
+    Authenticated   — full plaintext todo list + HMAC signature.
+    Unauthenticated — AES-256-CBC encrypted response.
+    """
+    session = _auth.verify_session(session_token) if session_token else None
+    username = session["username"] if session else None
+    resource = f"/todos?userId={user_id}" if user_id else "/todos"
+
+    try:
+        data = _backend.list_todos(user_id or None)
+    except Exception as e:
+        _audit.record(username, session is not None, "list_todos", resource, f"error: {e}")
+        return {"status": "error", "message": f"Backend API error: {e}"}
+
+    _audit.record(username, session is not None, "list_todos", resource, "success")
+    return _respond(resource, data, session, username)
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_todo
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def get_todo(todo_id: int, session_token: str = "") -> dict:
+    """Fetch a single todo by ID (1-200) from the backend API.
+
+    Authenticated   — todo content + completion status + HMAC signature.
+    Unauthenticated — AES-256-CBC encrypted todo data.
+    """
+    session = _auth.verify_session(session_token) if session_token else None
+    username = session["username"] if session else None
+    resource = f"/todos/{todo_id}"
+
+    try:
+        data = _backend.get_todo(todo_id)
+    except Exception as e:
+        _audit.record(username, session is not None, "get_todo", resource, f"error: {e}")
+        return {"status": "error", "message": f"Backend API error: {e}"}
+
+    _audit.record(username, session is not None, "get_todo", resource, "success")
+    return _respond(resource, data, session, username)
 
 
 # ---------------------------------------------------------------------------
 # Tool: verify_integrity
 # ---------------------------------------------------------------------------
 @mcp.tool()
-def verify_integrity(filename: str, expected_hmac: str, session_token: str) -> dict:
-    """Verify that a file's current content matches a previously captured HMAC signature.
+def verify_integrity(resource_type: str, resource_id: int, expected_hmac: str, session_token: str) -> dict:
+    """Re-fetch a resource from the backend and verify it matches a saved HMAC.
 
-    Re-reads the file, recomputes the HMAC-SHA256, and compares using a
-    constant-time comparison to prevent timing attacks.
+    The gateway re-fetches the resource live from the backend API, recomputes
+    its HMAC-SHA256, and compares against expected_hmac using constant-time
+    comparison (prevents timing attacks).
 
-    Useful for detecting whether write_file (or any other change) has modified
-    a file since the signature was captured with read_file.
+    Use this to detect:
+      - Upstream API returning inconsistent/changed data
+      - Man-in-the-middle modification of API responses
+      - Local signature corruption (tamper simulation)
 
-    Requires authentication — attempts without a token are blocked and logged.
+    resource_type: "user", "post", or "todo"
+    resource_id:   numeric ID of the resource to re-fetch and verify
+
+    Requires authentication.
     """
     session = _auth.verify_session(session_token)
     if not session:
-        _audit.record(None, False, "verify_integrity", filename, "denied — not authenticated")
-        return {"status": "error", "message": "Authentication required to verify file integrity."}
+        resource = f"/{resource_type}s/{resource_id}"
+        _audit.record(None, False, "verify_integrity", resource, "denied — not authenticated")
+        return {"status": "error", "message": "Authentication required to verify integrity."}
 
+    resource = f"/{resource_type}s/{resource_id}"
     try:
-        content, sha = _store.read_file(filename)
-    except KeyError:
-        return {"status": "error", "message": f"File not found: '{filename}'"}
+        if resource_type == "user":
+            data = _backend.get_user(resource_id)
+        elif resource_type == "post":
+            data = _backend.get_post(resource_id)
+        elif resource_type == "todo":
+            data = _backend.get_todo(resource_id)
+        else:
+            return {
+                "status": "error",
+                "message": f"Unknown resource_type '{resource_type}'. Use 'user', 'post', or 'todo'.",
+            }
+    except Exception as e:
+        return {"status": "error", "message": f"Backend API error: {e}"}
 
-    intact = _crypto.verify(content, expected_hmac)
+    json_str = json.dumps(data, ensure_ascii=False)
+    intact = _crypto.verify(json_str, expected_hmac)
     outcome = "intact" if intact else "TAMPERED"
-    _audit.record(session["username"], True, "verify_integrity", filename, outcome)
+    _audit.record(session["username"], True, "verify_integrity", resource, outcome)
+
     return {
         "status": "success",
-        "filename": filename,
-        "sha256": sha,
+        "resource": resource,
         "intact": intact,
         "verdict": (
-            "File is intact — content matches the HMAC signature."
+            f"{resource} is intact — response matches the saved HMAC signature."
             if intact else
-            "WARNING: Content does NOT match the signature. "
-            "The file has been modified since the signature was captured."
+            f"WARNING: {resource} does NOT match the saved signature. "
+            "The backend response has changed or the signature was corrupted."
         ),
     }
 
@@ -374,15 +393,13 @@ def verify_integrity(filename: str, expected_hmac: str, session_token: str) -> d
 # ---------------------------------------------------------------------------
 @mcp.tool()
 def get_audit_log(session_token: str, unauthorized_only: bool = False) -> dict:
-    """Retrieve the server's audit log.
+    """Retrieve the gateway's audit log.
 
     Only authenticated users can view the audit log (zero-trust: the log
     itself is a protected resource).
 
-    Set unauthorized_only=True to filter for non-authenticated access attempts,
-    so you can see exactly who tried to read files without credentials.
-
-    The log captures: timestamp, username, auth status, action, resource, outcome.
+    Set unauthorized_only=True to filter for unauthenticated access attempts
+    — see exactly who tried to read data without credentials.
     """
     session = _auth.verify_session(session_token)
     if not session:
@@ -394,7 +411,7 @@ def get_audit_log(session_token: str, unauthorized_only: bool = False) -> dict:
 
     _audit.record(
         session["username"], True, "read_audit_log", "audit_log",
-        f"success ({len(formatted)} entries)"
+        f"success ({len(formatted)} entries)",
     )
     return {
         "status": "success",
@@ -411,20 +428,16 @@ def get_audit_log(session_token: str, unauthorized_only: bool = False) -> dict:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="MCP Security Simulation v2")
-    parser.add_argument(
-        "--transport",
-        choices=["stdio", "streamable-http"],
-        default="streamable-http",
-    )
+    parser = argparse.ArgumentParser(description="MCP Security Gateway")
+    parser.add_argument("--transport", choices=["stdio", "streamable-http"], default="streamable-http")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
 
     if args.transport == "streamable-http":
-        print(f"[v2] FastMCP server on http://{args.host}:{args.port}/mcp")
-        print("[v2] Demo files: config.json  secrets.env  user_database.csv  audit_log.txt  encryption_keys.txt")
-        print("[v2] Credentials: admin/admin123  or  viewer/view456")
+        print(f"[gateway] FastMCP server  →  http://{args.host}:{args.port}/mcp")
+        print("[gateway] Backend API     →  https://jsonplaceholder.typicode.com")
+        print("[gateway] Credentials     →  admin/admin123   viewer/view456")
         mcp.run(transport="streamable-http", host=args.host, port=args.port)
     else:
         mcp.run(transport="stdio")

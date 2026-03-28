@@ -1,17 +1,24 @@
-"""Interactive demo client for MCP Security Simulation v2.
+"""Automated demo walkthrough for the MCP Security Gateway.
 
-Connects to the running FastMCP server and walks through the security features:
+Walks through every security feature non-interactively:
 
-  1. Show that unauthenticated access returns encrypted, uninterpretable data
-  2. Authenticate and read files in plaintext
-  3. Capture an HMAC signature and verify file integrity
-  4. View the audit log to see all unauthorized access attempts
+  1.  Unauthenticated list_users     → encrypted blob
+  2.  Unauthenticated get_user(3)    → encrypted blob
+  3.  Authenticate as admin          → get session token
+  4.  list_users with token          → plaintext user list
+  5.  get_user(3) with token         → full profile
+  6.  list_posts(user_id=3)          → that user's 10 posts
+  7.  get_post(1)                    → single post in full
+  8.  list_todos(user_id=1)          → that user's todos with completion status
+  9.  sign user 3  +  verify intact  → HMAC integrity check (should pass)
+  10. tampertest user 3              → corrupted signature → tamper detected
+  11. get_audit_log(unauthorized_only=True) → see steps 1-2 recorded
+  12. logout
 
 Usage
 -----
-    python v2/demo_client.py                     # connect to default http://127.0.0.1:8000/mcp
-    python v2/demo_client.py --url http://...    # custom server URL
-    python v2/demo_client.py --auto              # run all steps non-interactively
+    python demo_client.py               # connect to http://127.0.0.1:8000/mcp
+    python demo_client.py --url http:// # custom server URL
 """
 import argparse
 import asyncio
@@ -22,7 +29,6 @@ from typing import Any
 
 from fastmcp import Client
 
-# ANSI colours — fall back gracefully on terminals that don't support them
 _RESET  = "\033[0m"
 _BOLD   = "\033[1m"
 _RED    = "\033[31m"
@@ -32,239 +38,168 @@ _CYAN   = "\033[36m"
 _DIM    = "\033[2m"
 
 
-def _c(text: str, colour: str) -> str:
-    return f"{colour}{text}{_RESET}"
-
-
-def _header(title: str) -> None:
+def _c(text, colour): return f"{colour}{text}{_RESET}"
+def _header(title):
     bar = "─" * 70
-    print(f"\n{_c(bar, _CYAN)}")
-    print(f"{_c('  ' + title, _BOLD + _CYAN)}")
-    print(f"{_c(bar, _CYAN)}")
+    print(f"\n{_c(bar, _CYAN)}\n{_c('  ' + title, _BOLD + _CYAN)}\n{_c(bar, _CYAN)}")
+def _step(n, desc): print(f"\n{_c(f'[Step {n}]', _BOLD + _YELLOW)} {desc}")
+def _ok(msg):   print(f"  {_c('✓', _GREEN)} {msg}")
+def _warn(msg): print(f"  {_c('!', _RED + _BOLD)} {msg}")
+def _info(msg): print(f"  {_c('·', _DIM)} {msg}")
 
 
-def _step(n: int, description: str) -> None:
-    print(f"\n{_c(f'[Step {n}]', _BOLD + _YELLOW)} {description}")
-
-
-def _ok(msg: str) -> None:
-    print(f"  {_c('✓', _GREEN)} {msg}")
-
-
-def _warn(msg: str) -> None:
-    print(f"  {_c('!', _RED + _BOLD)} {msg}")
-
-
-def _info(msg: str) -> None:
-    print(f"  {_c('·', _DIM)} {msg}")
-
-
-def _dump(label: str, data: Any, max_len: int = 120) -> None:
-    raw = json.dumps(data, indent=2)
-    if len(raw) > max_len * 3:
-        lines = raw.splitlines()[:12]
-        raw = "\n".join(lines) + f"\n  … ({len(raw)} chars total, truncated)"
-    print(f"\n  {_c(label + ':', _BOLD)}")
-    for line in raw.splitlines():
-        print(f"    {_DIM}{line}{_RESET}")
+def _r(result) -> dict:
+    return result.data if isinstance(result.data, dict) else json.loads(result.content[0].text)
 
 
 def _pause(auto: bool) -> None:
     if not auto:
-        try:
-            input(f"\n  {_c('Press Enter to continue …', _DIM)}")
-        except EOFError:
-            pass
+        input(f"  {_c('Press Enter to continue…', _DIM)}")
 
 
 async def run_demo(server_url: str, auto: bool) -> None:
-    _header("MCP Security Simulation v2 — Live Demo")
-    print(f"\n  Server : {_c(server_url, _CYAN)}")
-    print(  "  Target : GitHub repository (public-apis/public-apis)\n")
+    _header("MCP Security Gateway — Automated Demo")
+    print(f"\n  Gateway : {_c(server_url, _CYAN)}")
+    print(f"  Backend : {_c('https://jsonplaceholder.typicode.com', _CYAN)}\n")
+    _pause(auto)
 
     async with Client(server_url) as client:
+        token = None
 
-        # ------------------------------------------------------------------ #
-        # 0 — list available tools
-        # ------------------------------------------------------------------ #
-        _step(0, "Discover available MCP tools")
-        tools = await client.list_tools()
-        for t in tools:
-            _ok(f"{t.name:<22}  {t.description.splitlines()[0] if t.description else ''}")
+        # ── Step 1: unauthenticated list_users ────────────────────────────────
+        _step(1, "list_users() without authentication → expect AES-256 ciphertext")
+        d = _r(await client.call_tool("list_users", {"session_token": ""}))
+        assert d["authenticated"] is False, "Expected unauthenticated response"
+        blob = d["data"]
+        _warn(f"Response is encrypted (uninterpretable):  {blob[:60]}…")
+        _info(d.get("notice", ""))
         _pause(auto)
 
-        # ------------------------------------------------------------------ #
-        # 1 — unauthenticated list_files
-        # ------------------------------------------------------------------ #
-        _step(1, "List files WITHOUT authentication  →  encrypted metadata")
-        result = await client.call_tool("list_files", {"path": ""})
-        parsed = result.data if isinstance(result.data, dict) else json.loads(result.content[0].text)
-        _info(f"authenticated = {parsed.get('authenticated')}")
-        _info(f"item_count    = {parsed.get('item_count')}")
-        items = parsed.get("items", [])[:3]
-        for item in items:
-            _warn(f"name (encrypted): {item['name'][:60]}…")
-        _info(parsed.get("notice", ""))
+        # ── Step 2: unauthenticated get_user ─────────────────────────────────
+        _step(2, "get_user(3) without authentication → expect AES-256 ciphertext")
+        d = _r(await client.call_tool("get_user", {"user_id": 3, "session_token": ""}))
+        assert d["authenticated"] is False
+        _warn(f"Encrypted user profile:  {d['data'][:60]}…")
         _pause(auto)
 
-        # ------------------------------------------------------------------ #
-        # 2 — unauthenticated read_file
-        # ------------------------------------------------------------------ #
-        _step(2, "Read a file WITHOUT authentication  →  encrypted content")
-        result = await client.call_tool("read_file", {"file_path": "README.md"})
-        parsed = result.data if isinstance(result.data, dict) else json.loads(result.content[0].text)
-        _info(f"authenticated  = {parsed.get('authenticated')}")
-        ct = parsed.get("content", "")
-        _warn(f"content (AES-256 ciphertext, first 80 chars): {ct[:80]}…")
-        _info(parsed.get("notice", ""))
+        # ── Step 3: authenticate ──────────────────────────────────────────────
+        _step(3, "authenticate('admin', 'admin123') → get session token")
+        d = _r(await client.call_tool("authenticate", {"username": "admin", "password": "admin123"}))
+        assert d["status"] == "success", f"Auth failed: {d}"
+        token = d["session_token"]
+        _ok(f"Authenticated  |  token: {token[:16]}…  (expires in {d['expires_in_seconds']}s)")
         _pause(auto)
 
-        # ------------------------------------------------------------------ #
-        # 3 — authenticate
-        # ------------------------------------------------------------------ #
-        _step(3, "Authenticate as admin")
-        result = await client.call_tool(
-            "authenticate", {"username": "admin", "password": "admin123"}
-        )
-        parsed = result.data if isinstance(result.data, dict) else json.loads(result.content[0].text)
-        if parsed.get("status") != "success":
-            _warn(f"Authentication failed: {parsed}")
-            return
-        token = parsed["session_token"]
-        _ok(f"status         = {parsed['status']}")
-        _ok(f"session_token  = {token[:24]}… (truncated for display)")
-        _ok(f"expires_in     = {parsed.get('expires_in_seconds')}s")
+        # ── Step 4: list_users authenticated ─────────────────────────────────
+        _step(4, "list_users(session_token=…) → plaintext user list")
+        d = _r(await client.call_tool("list_users", {"session_token": token}))
+        assert d["authenticated"] is True
+        users = d["data"]
+        _ok(f"Received {len(users)} users in plaintext")
+        for u in users[:3]:
+            _info(f"  {u['id']:<3} {u['name']:<25} {u['email']}")
+        _info(f"  … and {len(users) - 3} more")
         _pause(auto)
 
-        # ------------------------------------------------------------------ #
-        # 4 — authenticated list_files
-        # ------------------------------------------------------------------ #
-        _step(4, "List files WITH authentication  →  real metadata")
-        result = await client.call_tool(
-            "list_files", {"path": "", "session_token": token}
-        )
-        parsed = result.data if isinstance(result.data, dict) else json.loads(result.content[0].text)
-        _ok(f"authenticated = {parsed.get('authenticated')}")
-        _ok(f"item_count    = {parsed.get('item_count')}")
-        for item in parsed.get("items", [])[:5]:
-            _ok(f"  {item['type']:<6}  {item['name']:<40}  {item.get('size', '')} bytes")
+        # ── Step 5: get_user authenticated ───────────────────────────────────
+        _step(5, "get_user(3, session_token=…) → full profile")
+        d = _r(await client.call_tool("get_user", {"user_id": 3, "session_token": token}))
+        u = d["data"]
+        _ok(f"User 3: {u['name']} ({u['email']})")
+        _info(f"  company  : {u.get('company', {}).get('name')}")
+        _info(f"  address  : {u.get('address', {}).get('city')}")
+        _info(f"  hmac     : {d.get('hmac_signature','')[:32]}…")
         _pause(auto)
 
-        # ------------------------------------------------------------------ #
-        # 5 — authenticated read_file + capture HMAC
-        # ------------------------------------------------------------------ #
-        _step(5, "Read README.md WITH authentication  →  plaintext + HMAC signature")
-        result = await client.call_tool(
-            "read_file", {"file_path": "README.md", "session_token": token}
-        )
-        parsed = result.data if isinstance(result.data, dict) else json.loads(result.content[0].text)
-        content_preview = parsed.get("content", "")[:200].replace("\n", " ")
-        hmac_sig = parsed.get("hmac_signature", "")
-        _ok(f"authenticated  = {parsed.get('authenticated')}")
-        _ok(f"git_sha        = {parsed.get('git_sha', '')[:12]}…")
-        _ok(f"content (first 200 chars): {content_preview}…")
-        _ok(f"hmac_signature = {hmac_sig[:32]}…")
+        # ── Step 6: list_posts for user 3 ────────────────────────────────────
+        _step(6, "list_posts(user_id=3, session_token=…) → that user's posts")
+        d = _r(await client.call_tool("list_posts", {"user_id": 3, "session_token": token}))
+        posts = d["data"]
+        _ok(f"Received {len(posts)} posts for user 3")
+        for p in posts[:3]:
+            _info(f"  post {p['id']:<4} {p['title'][:52]}")
         _pause(auto)
 
-        # ------------------------------------------------------------------ #
-        # 6 — verify_integrity (intact)
-        # ------------------------------------------------------------------ #
-        _step(6, "Verify file integrity  →  content unchanged since step 5")
-        result = await client.call_tool(
-            "verify_integrity",
-            {"file_path": "README.md", "expected_hmac": hmac_sig, "session_token": token},
-        )
-        parsed = result.data if isinstance(result.data, dict) else json.loads(result.content[0].text)
-        _ok(f"intact  = {parsed.get('intact')}")
-        _ok(f"verdict = {parsed.get('verdict')}")
+        # ── Step 7: get_post ─────────────────────────────────────────────────
+        _step(7, "get_post(1, session_token=…) → single post in full")
+        d = _r(await client.call_tool("get_post", {"post_id": 1, "session_token": token}))
+        p = d["data"]
+        _ok(f"Post 1: '{p['title']}'")
+        for line in p.get("body", "").splitlines()[:3]:
+            _info(f"  {line}")
         _pause(auto)
 
-        # ------------------------------------------------------------------ #
-        # 7 — verify_integrity with tampered HMAC
-        # ------------------------------------------------------------------ #
-        _step(7, "Simulate tampered signature  →  integrity check fails")
-        bad_sig = hmac_sig[:10] + "0000000000" + hmac_sig[20:]
-        result = await client.call_tool(
-            "verify_integrity",
-            {"file_path": "README.md", "expected_hmac": bad_sig, "session_token": token},
-        )
-        parsed = result.data if isinstance(result.data, dict) else json.loads(result.content[0].text)
-        _warn(f"intact  = {parsed.get('intact')}")
-        _warn(f"verdict = {parsed.get('verdict')}")
+        # ── Step 8: list_todos for user 1 ────────────────────────────────────
+        _step(8, "list_todos(user_id=1, session_token=…) → todos with completion status")
+        d = _r(await client.call_tool("list_todos", {"user_id": 1, "session_token": token}))
+        todos = d["data"]
+        done  = sum(1 for t in todos if t.get("completed"))
+        _ok(f"Received {len(todos)} todos for user 1  ({done} completed, {len(todos)-done} pending)")
+        for t in todos[:4]:
+            flag = "✓" if t.get("completed") else "✗"
+            _info(f"  [{flag}] {t['title'][:55]}")
         _pause(auto)
 
-        # ------------------------------------------------------------------ #
-        # 8 — attempt verify_integrity without auth
-        # ------------------------------------------------------------------ #
-        _step(8, "Attempt verify_integrity WITHOUT session token  →  denied + logged")
-        result = await client.call_tool(
-            "verify_integrity",
-            {"file_path": "README.md", "expected_hmac": hmac_sig, "session_token": ""},
-        )
-        parsed = result.data if isinstance(result.data, dict) else json.loads(result.content[0].text)
-        _warn(f"status  = {parsed.get('status')}")
-        _warn(f"message = {parsed.get('message')}")
+        # ── Step 9: sign + verify integrity ──────────────────────────────────
+        _step(9, "Sign user 3's response, then verify it hasn't changed")
+        d = _r(await client.call_tool("get_user", {"user_id": 3, "session_token": token}))
+        saved_hmac = d["hmac_signature"]
+        _ok(f"Saved HMAC:  {saved_hmac[:32]}…")
+
+        d = _r(await client.call_tool("verify_integrity", {
+            "resource_type": "user", "resource_id": 3,
+            "expected_hmac": saved_hmac, "session_token": token,
+        }))
+        assert d["intact"] is True, f"Unexpected tamper: {d}"
+        _ok(d["verdict"])
         _pause(auto)
 
-        # ------------------------------------------------------------------ #
-        # 9 — audit log (unauthorized only)
-        # ------------------------------------------------------------------ #
-        _step(9, "Read audit log  →  all unauthorized attempts (requires auth)")
-        result = await client.call_tool(
-            "get_audit_log",
-            {"session_token": token, "unauthorized_only": True},
-        )
-        parsed = result.data if isinstance(result.data, dict) else json.loads(result.content[0].text)
-        _ok(f"requested_by   = {parsed.get('requested_by')}")
-        _ok(f"filter         = {parsed.get('filter')}")
-        _ok(f"total_entries  = {parsed.get('total_entries')}")
-        print()
-        for line in parsed.get("log", []):
-            print(f"  {_c(line, _RED if 'UNAUTH' in line else _GREEN)}")
+        # ── Step 10: tampertest ───────────────────────────────────────────────
+        _step(10, "Corrupt the saved signature → tamper detection should fire")
+        bad_hmac = saved_hmac[:8] + "DEADBEEF" + saved_hmac[16:]
+        _warn(f"Corrupted HMAC:  {bad_hmac[:32]}…")
+        d = _r(await client.call_tool("verify_integrity", {
+            "resource_type": "user", "resource_id": 3,
+            "expected_hmac": bad_hmac, "session_token": token,
+        }))
+        assert d["intact"] is False, "Expected tamper detection to trigger"
+        _warn(d["verdict"])
+        _ok("Tamper detection is working correctly.")
         _pause(auto)
 
-        # ------------------------------------------------------------------ #
-        # 10 — logout
-        # ------------------------------------------------------------------ #
-        _step(10, "Logout  →  session token invalidated")
-        result = await client.call_tool("logout", {"session_token": token})
-        parsed = result.data if isinstance(result.data, dict) else json.loads(result.content[0].text)
-        _ok(f"status  = {parsed.get('status')}")
-        _ok(f"message = {parsed.get('message')}")
+        # ── Step 11: audit log ────────────────────────────────────────────────
+        _step(11, "get_audit_log(unauthorized_only=True) → see steps 1 and 2")
+        d = _r(await client.call_tool("get_audit_log", {
+            "session_token": token, "unauthorized_only": True
+        }))
+        entries = d.get("log", [])
+        _ok(f"Audit log has {len(entries)} unauthorized access attempt(s):")
+        for entry in entries:
+            _info(f"  {entry}")
+        _pause(auto)
 
-        # Confirm token is now invalid
-        result = await client.call_tool(
-            "list_files", {"session_token": token}
-        )
-        post_logout = result.data if isinstance(result.data, dict) else json.loads(result.content[0].text)
-        _warn(f"Using old token after logout → authenticated={post_logout.get('authenticated')} (token rejected, content encrypted)")
+        # ── Step 12: logout ───────────────────────────────────────────────────
+        _step(12, "logout → invalidate the session token")
+        d = _r(await client.call_tool("logout", {"session_token": token}))
+        assert d["status"] == "success"
+        _ok(d["message"])
 
-    _header("Demo complete")
-    print(textwrap.dedent(f"""
-  Summary of security properties demonstrated:
-    {_c('✓', _GREEN)} Unauthenticated callers receive AES-256-CBC ciphertext — uninterpretable
-    {_c('✓', _GREEN)} Authenticated callers receive plaintext + HMAC-SHA256 integrity signature
-    {_c('✓', _GREEN)} Tampered signatures are detected via constant-time HMAC comparison
-    {_c('✓', _GREEN)} verify_integrity requires authentication (zero-trust)
-    {_c('✓', _GREEN)} All access attempts (auth and unauth) recorded in audit log
-    {_c('✓', _GREEN)} Audit log is itself a protected resource — auth required to read it
-    {_c('✓', _GREEN)} GitHub API backend is read-only — files cannot be altered through server
-    {_c('✓', _GREEN)} Session tokens expire and are revoked immediately on logout
-    """))
+        _header("Demo complete")
+        print(textwrap.dedent(f"""
+  {_c('What was demonstrated:', _BOLD)}
+
+  1.  Zero-trust auth   — every request verified independently
+  2.  Encryption        — unauthenticated callers see only AES-256 ciphertext
+  3.  Real backend API  — data live from jsonplaceholder.typicode.com
+  4.  HMAC integrity    — gateway signs every response for tamper detection
+  5.  Audit log         — all access attempts recorded, visible to auth users
+        """))
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="MCP Security Simulation v2 demo client")
-    parser.add_argument(
-        "--url",
-        default="http://127.0.0.1:8000/mcp",
-        help="FastMCP server URL (default: http://127.0.0.1:8000/mcp)",
-    )
-    parser.add_argument(
-        "--auto",
-        action="store_true",
-        help="Run all steps without pausing for Enter",
-    )
+    parser = argparse.ArgumentParser(description="MCP Security Gateway demo")
+    parser.add_argument("--url", default="http://127.0.0.1:8000/mcp")
+    parser.add_argument("--auto", action="store_true", help="Run without pausing between steps")
     args = parser.parse_args()
     asyncio.run(run_demo(args.url, args.auto))
 
