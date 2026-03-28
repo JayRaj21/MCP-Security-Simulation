@@ -42,11 +42,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastmcp import FastMCP
 
-from v2.auth import AuthManager
-from v2.audit import AuditLogger
-from v2.crypto import CryptoManager
-from v2.filestore import FileStore
-from v2.config import (
+from auth import AuthManager
+from audit import AuditLogger
+from crypto import CryptoManager
+from filestore import FileStore
+from config import (
     USERS,
     ENCRYPTION_KEY,
     SESSION_DURATION,
