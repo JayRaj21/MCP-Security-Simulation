@@ -63,7 +63,7 @@ Start the shell with `make shell`, then use any of these commands:
 
 | Command | Description |
 |---------|-------------|
-| `users` | List all 10 users from the backend API |
+| `users` | List all users from the backend API |
 | `user <id>` | Fetch a single user profile (ID 1–10) |
 | `posts [user_id]` | List posts, optionally filtered by user (100 total, 10 per user) |
 | `post <id>` | Fetch a single post (ID 1–100) |
@@ -76,9 +76,20 @@ When unauthenticated, resource commands return an AES-256 encrypted blob. After 
 
 | Command | Description |
 |---------|-------------|
-| `login` | Authenticate and receive a session token |
+| `login <user> <pass>` | Authenticate and receive a session token |
 | `logout` | Invalidate the current session token |
 | `status` | Show current auth state (token, username) |
+
+### Delete / restore commands (auth required)
+
+Deletions are soft-delete only — held in memory, not sent to the backend. All deletions are automatically cleared when the server restarts.
+
+| Command | Description |
+|---------|-------------|
+| `delete user <id>` | Soft-delete a user — hidden from all subsequent calls |
+| `delete post <id>` | Soft-delete a post |
+| `delete todo <id>` | Soft-delete a todo |
+| `restore` | Restore all soft-deleted resources to original state _(admin only)_ |
 
 ### Integrity commands
 
@@ -90,12 +101,20 @@ When unauthenticated, resource commands return an AES-256 encrypted blob. After 
 
 `<type>` is one of: `user`, `post`, `todo`
 
-### Audit commands
+### Audit commands (auth required)
 
 | Command | Description |
 |---------|-------------|
-| `audit` | View the full audit log (requires login) |
-| `audit unauth` | View only unauthenticated access attempts |
+| `audit` | View unauthorized access attempts |
+| `audit --all` | View all access attempts |
+| `failed-auth` | View only failed login attempts _(admin only)_ |
+
+### Session management (admin only)
+
+| Command | Description |
+|---------|-------------|
+| `sessions` | List all active sessions (token prefix, username, role, expiry) |
+| `kick <username>` | Immediately revoke all sessions for a given user |
 
 ### Other
 
@@ -139,14 +158,21 @@ These are the tools exposed over the MCP protocol, callable by any MCP client:
 |------|------------|-------------|
 | `authenticate` | `username`, `password` | Returns a session token (1 hour expiry) |
 | `logout` | `session_token` | Revokes the token immediately |
-| `list_users` | `session_token=""` | All 10 users |
+| `list_users` | `session_token=""` | All users (excluding soft-deleted) |
 | `get_user` | `user_id`, `session_token=""` | Single user by ID (1–10) |
-| `list_posts` | `user_id=0`, `session_token=""` | Posts; `user_id=0` returns all 100 |
+| `list_posts` | `user_id=0`, `session_token=""` | Posts; `user_id=0` returns all |
 | `get_post` | `post_id`, `session_token=""` | Single post by ID (1–100) |
-| `list_todos` | `user_id=0`, `session_token=""` | Todos; `user_id=0` returns all 200 |
+| `list_todos` | `user_id=0`, `session_token=""` | Todos; `user_id=0` returns all |
 | `get_todo` | `todo_id`, `session_token=""` | Single todo by ID (1–200) |
+| `delete_user` | `user_id`, `session_token` | Soft-delete a user (auth required) |
+| `delete_post` | `post_id`, `session_token` | Soft-delete a post (auth required) |
+| `delete_todo` | `todo_id`, `session_token` | Soft-delete a todo (auth required) |
+| `restore_all` | `session_token` | Clear all soft-deletes (admin only) |
 | `verify_integrity` | `resource_type`, `resource_id`, `expected_hmac`, `session_token` | Re-fetches resource and compares HMAC |
 | `get_audit_log` | `session_token`, `unauthorized_only=False` | Audit log (auth required) |
+| `get_failed_auth_attempts` | `session_token` | Failed login attempts only (admin only) |
+| `list_active_sessions` | `session_token` | All live sessions with metadata (admin only) |
+| `force_logout_user` | `target_username`, `session_token` | Revoke all sessions for a user (admin only) |
 
 ---
 

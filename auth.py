@@ -67,6 +67,29 @@ class AuthManager:
             if now - s["created_at"] <= self._session_duration
         ]
 
+    def list_active_sessions(self) -> list:
+        """Return metadata for all active sessions (token prefix only, never full token)."""
+        now = time.time()
+        result = []
+        for token, s in list(self._sessions.items()):
+            age = now - s["created_at"]
+            if age <= self._session_duration:
+                result.append({
+                    "token_prefix": token[:8] + "…",
+                    "username": s["username"],
+                    "role": s["role"],
+                    "age_seconds": int(age),
+                    "expires_in_seconds": int(self._session_duration - age),
+                })
+        return result
+
+    def revoke_all_for_user(self, username: str) -> int:
+        """Revoke every session belonging to username. Returns the count revoked."""
+        to_delete = [t for t, s in self._sessions.items() if s["username"] == username]
+        for t in to_delete:
+            del self._sessions[t]
+        return len(to_delete)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

@@ -367,6 +367,90 @@ async def cmd_tampertest(client, state, args):
     info("Original signature restored.")
 
 
+async def cmd_sessions(client, state, _args):
+    if not state.authenticated:
+        err("Authentication required."); return
+    d = _r(await client.call_tool("list_active_sessions", {"session_token": state.token}))
+    if d.get("status") == "error":
+        err(d["message"]); return
+    sessions = d.get("sessions", [])
+    fmt = "  {:<12} {:<16} {:<10} {:<12} {}"
+    print(c(fmt.format("TOKEN", "USERNAME", "ROLE", "AGE (s)", "EXPIRES IN (s)"), DIM))
+    sep()
+    for s in sessions:
+        print(fmt.format(
+            c(s["token_prefix"], CYAN),
+            s["username"],
+            s["role"],
+            s["age_seconds"],
+            s["expires_in_seconds"],
+        ))
+    info(f"Total active sessions: {c(len(sessions), BOLD)}")
+
+
+async def cmd_kick(client, state, args):
+    if not args:
+        err("Usage: kick <username>"); return
+    if not state.authenticated:
+        err("Authentication required."); return
+    target = args[0]
+    d = _r(await client.call_tool("force_logout_user", {
+        "target_username": target, "session_token": state.token
+    }))
+    if d.get("status") == "error":
+        err(d["message"]); return
+    ok(d["message"])
+
+
+async def cmd_failed_auth(client, state, _args):
+    if not state.authenticated:
+        err("Authentication required."); return
+    d = _r(await client.call_tool("get_failed_auth_attempts", {"session_token": state.token}))
+    if d.get("status") == "error":
+        err(d["message"]); return
+    entries = d.get("log", [])
+    info(f"Failed auth attempts: {c(len(entries), BOLD)}")
+    sep()
+    if not entries:
+        ok("No failed authentication attempts recorded."); return
+    for line in entries:
+        print(f"  {c(line, RED)}")
+
+
+async def cmd_delete(client, state, args):
+    if len(args) < 2:
+        err("Usage: delete <type> <id>   (type: user | post | todo)"); return
+    if not state.authenticated:
+        err("Authentication required."); return
+    rtype, rid_str = args[0], args[1]
+    try:
+        rid = int(rid_str)
+    except ValueError:
+        err("id must be an integer"); return
+
+    tool_map = {"user": "delete_user", "post": "delete_post", "todo": "delete_todo"}
+    id_param  = {"user": "user_id",    "post": "post_id",     "todo": "todo_id"}
+    if rtype not in tool_map:
+        err(f"Unknown type '{rtype}'. Use: user, post, todo"); return
+
+    d = _r(await client.call_tool(tool_map[rtype], {id_param[rtype]: rid, "session_token": state.token}))
+    if d.get("status") == "error":
+        err(d["message"]); return
+    warn(d["message"])
+
+
+async def cmd_restore(client, state, _args):
+    if not state.authenticated:
+        err("Authentication required."); return
+    d = _r(await client.call_tool("restore_all", {"session_token": state.token}))
+    if d.get("status") == "error":
+        err(d["message"]); return
+    ok(d["message"])
+    restored = d.get("restored", {})
+    for resource, count in restored.items():
+        info(f"  {resource}: {count} item(s) undeleted")
+
+
 async def cmd_audit(client, state, args):
     if not state.authenticated:
         err("Authentication required to view the audit log.")
@@ -411,21 +495,32 @@ def cmd_help(_c, _s, _a):
     {c('logout', YELLOW)}                      End your session
 
   {c('Resources  (encrypted when logged out)', BOLD)}
-    {c('users', YELLOW)}                        List all 10 users
+    {c('users', YELLOW)}                        List all users
     {c('user <id>', YELLOW)}                    Get a single user  (id: 1-10)
     {c('posts [<user_id>]', YELLOW)}            List posts, optionally filtered by user
     {c('post <id>', YELLOW)}                    Get a single post  (id: 1-100)
     {c('todos [<user_id>]', YELLOW)}            List todos, optionally filtered by user
     {c('todo <id>', YELLOW)}                    Get a single todo  (id: 1-200)
 
+  {c('Delete / Restore  (auth required)', BOLD)}
+    {c('delete user <id>', YELLOW)}             Soft-delete a user
+    {c('delete post <id>', YELLOW)}             Soft-delete a post
+    {c('delete todo <id>', YELLOW)}             Soft-delete a todo
+    {c('restore', YELLOW)}                      Restore all soft-deleted resources  [admin]
+
   {c('Integrity', BOLD)}
     {c('sign <type> <id>', YELLOW)}             Save a resource HMAC-SHA256 signature
     {c('verify <type> <id>', YELLOW)}           Re-fetch and verify the HMAC
     {c('tampertest <type> <id>', YELLOW)}       Corrupt the signature to trigger detection
 
-  {c('Audit', BOLD)}
+  {c('Audit  (auth required)', BOLD)}
     {c('audit', YELLOW)}                        Show unauthorized access attempts
     {c('audit --all', YELLOW)}                  Show all access attempts
+    {c('failed-auth', YELLOW)}                  Show failed login attempts  [admin]
+
+  {c('Session management  (admin only)', BOLD)}
+    {c('sessions', YELLOW)}                     List all active sessions
+    {c('kick <username>', YELLOW)}              Force-logout all sessions for a user
 
   {c('Other', BOLD)}
     {c('status', YELLOW)}                       Show your session and saved signatures
@@ -440,6 +535,12 @@ def cmd_help(_c, _s, _a):
     {c('login admin admin123', YELLOW)}         → get session
     {c('users', YELLOW)}  {c('user 3', YELLOW)}               → plaintext
 
+  Test soft-delete and restore:
+    {c('login admin admin123', YELLOW)}
+    {c('delete user 5', YELLOW)}               → user 5 removed from list
+    {c('users', YELLOW)}                        → 9 users visible
+    {c('restore', YELLOW)}                      → all 10 users back
+
   Test integrity protection:
     {c('sign user 3', YELLOW)}                  → save HMAC
     {c('verify user 3', YELLOW)}                → intact ✓
@@ -450,25 +551,31 @@ def cmd_help(_c, _s, _a):
     {c('todos 1', YELLOW)}                      → encrypted + logged
     {c('login admin admin123', YELLOW)}
     {c('audit', YELLOW)}                        → see the unauthorized attempts
+    {c('failed-auth', YELLOW)}                  → see failed logins
     """))
 
 
 # ── Command registry ──────────────────────────────────────────────────────────
 COMMANDS = {
-    "login":      cmd_login,
-    "logout":     cmd_logout,
-    "users":      cmd_users,
-    "user":       cmd_user,
-    "posts":      cmd_posts,
-    "post":       cmd_post,
-    "todos":      cmd_todos,
-    "todo":       cmd_todo,
-    "sign":       cmd_sign,
-    "verify":     cmd_verify,
-    "tampertest": cmd_tampertest,
-    "audit":      cmd_audit,
-    "status":     cmd_status,
-    "help":       cmd_help,
+    "login":       cmd_login,
+    "logout":      cmd_logout,
+    "users":       cmd_users,
+    "user":        cmd_user,
+    "posts":       cmd_posts,
+    "post":        cmd_post,
+    "todos":       cmd_todos,
+    "todo":        cmd_todo,
+    "sign":        cmd_sign,
+    "verify":      cmd_verify,
+    "tampertest":  cmd_tampertest,
+    "audit":       cmd_audit,
+    "sessions":    cmd_sessions,
+    "kick":        cmd_kick,
+    "failed-auth": cmd_failed_auth,
+    "delete":      cmd_delete,
+    "restore":     cmd_restore,
+    "status":      cmd_status,
+    "help":        cmd_help,
 }
 
 

@@ -423,6 +423,195 @@ def get_audit_log(session_token: str, unauthorized_only: bool = False) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Tool: list_active_sessions
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def list_active_sessions(session_token: str) -> dict:
+    """List all currently active sessions on the gateway.
+
+    Returns a summary of each live session: token prefix (not the full token),
+    username, role, age, and time until expiry.
+
+    Requires admin role.
+    """
+    session = _auth.verify_session(session_token)
+    if not session:
+        _audit.record(None, False, "list_active_sessions", "sessions", "denied — not authenticated")
+        return {"status": "error", "message": "Authentication required."}
+    if session["role"] != "admin":
+        _audit.record(session["username"], True, "list_active_sessions", "sessions", "denied — admin only")
+        return {"status": "error", "message": "Admin role required."}
+
+    sessions = _auth.list_active_sessions()
+    _audit.record(session["username"], True, "list_active_sessions", "sessions",
+                  f"success ({len(sessions)} active)")
+    return {"status": "success", "total": len(sessions), "sessions": sessions}
+
+
+# ---------------------------------------------------------------------------
+# Tool: force_logout_user
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def force_logout_user(target_username: str, session_token: str) -> dict:
+    """Immediately revoke all sessions belonging to a specific user.
+
+    Use this to eject a compromised or misbehaving account without waiting
+    for session expiry.
+
+    Requires admin role.
+    """
+    session = _auth.verify_session(session_token)
+    if not session:
+        _audit.record(None, False, "force_logout_user", f"sessions/{target_username}",
+                      "denied — not authenticated")
+        return {"status": "error", "message": "Authentication required."}
+    if session["role"] != "admin":
+        _audit.record(session["username"], True, "force_logout_user", f"sessions/{target_username}",
+                      "denied — admin only")
+        return {"status": "error", "message": "Admin role required."}
+
+    count = _auth.revoke_all_for_user(target_username)
+    _audit.record(session["username"], True, "force_logout_user", f"sessions/{target_username}",
+                  f"revoked {count} session(s)")
+    return {
+        "status": "success",
+        "message": f"Revoked {count} session(s) for '{target_username}'.",
+        "revoked": count,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_failed_auth_attempts
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def get_failed_auth_attempts(session_token: str) -> dict:
+    """Retrieve all failed authentication attempts from the audit log.
+
+    Shows every failed login (wrong username or password) — useful for
+    detecting brute-force or credential-stuffing attacks.
+
+    Requires admin role.
+    """
+    session = _auth.verify_session(session_token)
+    if not session:
+        _audit.record(None, False, "get_failed_auth_attempts", "audit_log",
+                      "denied — not authenticated")
+        return {"status": "error", "message": "Authentication required."}
+    if session["role"] != "admin":
+        _audit.record(session["username"], True, "get_failed_auth_attempts", "audit_log",
+                      "denied — admin only")
+        return {"status": "error", "message": "Admin role required."}
+
+    raw = _audit.get_failed_auth()
+    formatted = [_audit.format_entry(e) for e in raw]
+    _audit.record(session["username"], True, "get_failed_auth_attempts", "audit_log",
+                  f"success ({len(formatted)} entries)")
+    return {"status": "success", "total": len(formatted), "log": formatted}
+
+
+# ---------------------------------------------------------------------------
+# Tool: delete_user
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def delete_user(user_id: int, session_token: str) -> dict:
+    """Soft-delete a user from the gateway (authentication required).
+
+    The deletion is held in memory only — the user is hidden from all
+    subsequent list_users and get_user calls until restore_all is called
+    or the server restarts (which resets all deletes automatically).
+    """
+    session = _auth.verify_session(session_token)
+    if not session:
+        _audit.record(None, False, "delete_user", f"/users/{user_id}",
+                      "denied — not authenticated")
+        return {"status": "error", "message": "Authentication required."}
+
+    _backend.delete_user(user_id)
+    _audit.record(session["username"], True, "delete_user", f"/users/{user_id}", "deleted")
+    return {
+        "status": "success",
+        "message": f"User {user_id} soft-deleted. Call restore_all to undo.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool: delete_post
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def delete_post(post_id: int, session_token: str) -> dict:
+    """Soft-delete a post from the gateway (authentication required).
+
+    The deletion is held in memory only and is reset on server restart.
+    """
+    session = _auth.verify_session(session_token)
+    if not session:
+        _audit.record(None, False, "delete_post", f"/posts/{post_id}",
+                      "denied — not authenticated")
+        return {"status": "error", "message": "Authentication required."}
+
+    _backend.delete_post(post_id)
+    _audit.record(session["username"], True, "delete_post", f"/posts/{post_id}", "deleted")
+    return {
+        "status": "success",
+        "message": f"Post {post_id} soft-deleted. Call restore_all to undo.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool: delete_todo
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def delete_todo(todo_id: int, session_token: str) -> dict:
+    """Soft-delete a todo from the gateway (authentication required).
+
+    The deletion is held in memory only and is reset on server restart.
+    """
+    session = _auth.verify_session(session_token)
+    if not session:
+        _audit.record(None, False, "delete_todo", f"/todos/{todo_id}",
+                      "denied — not authenticated")
+        return {"status": "error", "message": "Authentication required."}
+
+    _backend.delete_todo(todo_id)
+    _audit.record(session["username"], True, "delete_todo", f"/todos/{todo_id}", "deleted")
+    return {
+        "status": "success",
+        "message": f"Todo {todo_id} soft-deleted. Call restore_all to undo.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool: restore_all
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def restore_all(session_token: str) -> dict:
+    """Restore all soft-deleted resources to their original state.
+
+    Clears every pending soft-delete so that all users, posts, and todos
+    become visible again. This also happens automatically on server restart.
+
+    Requires admin role.
+    """
+    session = _auth.verify_session(session_token)
+    if not session:
+        _audit.record(None, False, "restore_all", "backend", "denied — not authenticated")
+        return {"status": "error", "message": "Authentication required."}
+    if session["role"] != "admin":
+        _audit.record(session["username"], True, "restore_all", "backend", "denied — admin only")
+        return {"status": "error", "message": "Admin role required."}
+
+    counts = _backend.restore_all()
+    total = sum(counts.values())
+    _audit.record(session["username"], True, "restore_all", "backend",
+                  f"restored {total} resource(s)")
+    return {
+        "status": "success",
+        "message": f"All resources restored to original state.",
+        "restored": counts,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":

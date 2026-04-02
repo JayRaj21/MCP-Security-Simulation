@@ -64,6 +64,13 @@ class AuditLogger:
         """Return only entries where ``authenticated=False``."""
         return [asdict(e) for e in self._log if not e.authenticated]
 
+    def get_failed_auth(self) -> List[dict]:
+        """Return only failed authentication attempts (wrong credentials)."""
+        return [
+            asdict(e) for e in self._log
+            if e.action == "authenticate" and not e.authenticated
+        ]
+
     # ------------------------------------------------------------------
     # Formatting
     # ------------------------------------------------------------------
