@@ -451,6 +451,142 @@ async def cmd_restore(client, state, _args):
         info(f"  {resource}: {count} item(s) undeleted")
 
 
+async def cmd_files(client, state, _args):
+    if not state.authenticated:
+        err("Authentication required."); return
+    d = _r(await client.call_tool("list_files", {"session_token": state.token}))
+    if d.get("status") == "error":
+        err(d["message"]); return
+    files = d.get("files", [])
+    fmt = "  {:<28} {:<10} {:<20} {}"
+    print(c(fmt.format("NAME", "SIZE", "SHA256", "INTEGRITY"), DIM))
+    sep()
+    for f in files:
+        intact = f.get("intact")
+        if intact is True:
+            tag = c("intact", GREEN)
+        elif intact is False:
+            tag = c("TAMPERED", RED + BOLD)
+        else:
+            tag = c("new file", YELLOW)
+        print(fmt.format(
+            c(f["name"], CYAN),
+            str(f["size_bytes"]) + "B",
+            f.get("sha256", ""),
+            tag,
+        ))
+
+
+async def cmd_file(client, state, args):
+    if not args:
+        err("Usage: file <name>"); return
+    if not state.authenticated:
+        err("Authentication required."); return
+    filename = args[0]
+    d = _r(await client.call_tool("read_file", {"filename": filename, "session_token": state.token}))
+    if d.get("status") == "error":
+        err(d["message"]); return
+    intact = d.get("intact")
+    intact_tag = (c("intact", GREEN) if intact is True
+                  else c("TAMPERED", RED + BOLD) if intact is False
+                  else c("new file", YELLOW))
+    info(f"file: {c(filename, CYAN)}  |  integrity: {intact_tag}")
+    sep()
+    for line in d.get("content", "").splitlines():
+        print(f"  {line}")
+    info(f"sha256: {c(d.get('sha256', '')[:20], DIM)}…")
+
+
+async def cmd_writefile(client, state, args):
+    if len(args) < 2:
+        err("Usage: writefile <name> <content>"); return
+    if not state.authenticated:
+        err("Authentication required."); return
+    filename, content = args[0], " ".join(args[1:])
+    d = _r(await client.call_tool("write_file", {
+        "filename": filename, "content": content, "session_token": state.token
+    }))
+    if d.get("status") == "error":
+        err(d["message"]); return
+    warn(d["message"])
+    info(f"sha256: {c(d.get('sha256', '')[:20], DIM)}…")
+    info(f"Run: checkfile {filename}  to confirm tamper detection")
+
+
+async def cmd_deletefile(client, state, args):
+    if not args:
+        err("Usage: deletefile <name>"); return
+    if not state.authenticated:
+        err("Authentication required."); return
+    filename = args[0]
+    d = _r(await client.call_tool("delete_file", {"filename": filename, "session_token": state.token}))
+    if d.get("status") == "error":
+        err(d["message"]); return
+    warn(d["message"])
+
+
+async def cmd_checkfile(client, state, args):
+    if not args:
+        err("Usage: checkfile <name>"); return
+    if not state.authenticated:
+        err("Authentication required."); return
+    filename = args[0]
+    d = _r(await client.call_tool("check_file_integrity", {
+        "filename": filename, "session_token": state.token
+    }))
+    if d.get("status") == "error":
+        err(d["message"]); return
+    intact = d.get("intact")
+    if intact is True:
+        ok(f"{c(filename, CYAN)} is intact — SHA-256 matches original.")
+    elif intact is False:
+        err(f"TAMPERED: {c(filename, CYAN)} does not match original!")
+        info(f"  current:  {d.get('current_sha256', '')[:32]}…")
+        info(f"  original: {d.get('original_sha256', '')[:32]}…")
+        info(f"  Run: repairfile {filename}  to restore")
+    else:
+        warn(f"{c(filename, CYAN)} is a new file — no original to compare against.")
+
+
+async def cmd_scanfiles(client, state, _args):
+    if not state.authenticated:
+        err("Authentication required."); return
+    d = _r(await client.call_tool("detect_tampered_files", {"session_token": state.token}))
+    if d.get("status") == "error":
+        err(d["message"]); return
+    tampered = d.get("tampered_files", [])
+    if not tampered:
+        ok(d["verdict"])
+    else:
+        err(d["verdict"])
+        for name in tampered:
+            print(f"    {c('→', RED)} {c(name, CYAN)}")
+        info("Run: resetfiles  to restore all  |  repairfile <name>  for one file")
+
+
+async def cmd_repairfile(client, state, args):
+    if not args:
+        err("Usage: repairfile <name>"); return
+    if not state.authenticated:
+        err("Authentication required."); return
+    filename = args[0]
+    d = _r(await client.call_tool("repair_file", {"filename": filename, "session_token": state.token}))
+    if d.get("status") == "error":
+        err(d["message"]); return
+    ok(d["message"])
+
+
+async def cmd_resetfiles(client, state, _args):
+    if not state.authenticated:
+        err("Authentication required."); return
+    d = _r(await client.call_tool("reset_files", {"session_token": state.token}))
+    if d.get("status") == "error":
+        err(d["message"]); return
+    ok(d["message"])
+    for name in d.get("files", []):
+        info(f"  restored: {c(name, CYAN)}")
+
+
 async def cmd_audit(client, state, args):
     if not state.authenticated:
         err("Authentication required to view the audit log.")
@@ -508,7 +644,17 @@ def cmd_help(_c, _s, _a):
     {c('delete todo <id>', YELLOW)}             Soft-delete a todo
     {c('restore', YELLOW)}                      Restore all soft-deleted resources  [admin]
 
-  {c('Integrity', BOLD)}
+  {c('File integrity  (auth required)', BOLD)}
+    {c('files', YELLOW)}                        List demo files with integrity status
+    {c('file <name>', YELLOW)}                  Read a file with integrity check
+    {c('writefile <name> <content>', YELLOW)}   Write/overwrite a file (simulates tampering)
+    {c('deletefile <name>', YELLOW)}            Delete a file
+    {c('checkfile <name>', YELLOW)}             Check one file's SHA-256 against original
+    {c('scanfiles', YELLOW)}                    Scan all files and report tampered ones
+    {c('repairfile <name>', YELLOW)}            Restore one file to original  [admin]
+    {c('resetfiles', YELLOW)}                   Restore all files to original  [admin]
+
+  {c('API Integrity  (HMAC)', BOLD)}
     {c('sign <type> <id>', YELLOW)}             Save a resource HMAC-SHA256 signature
     {c('verify <type> <id>', YELLOW)}           Re-fetch and verify the HMAC
     {c('tampertest <type> <id>', YELLOW)}       Corrupt the signature to trigger detection
@@ -546,6 +692,15 @@ def cmd_help(_c, _s, _a):
     {c('verify user 3', YELLOW)}                → intact ✓
     {c('tampertest user 3', YELLOW)}            → tamper detected ✗
 
+  Test file integrity monitoring:
+    {c('login admin admin123', YELLOW)}
+    {c('files', YELLOW)}                        → all 5 files intact
+    {c('writefile secrets.env HACKED', YELLOW)} → tamper a file
+    {c('scanfiles', YELLOW)}                    → secrets.env reported TAMPERED
+    {c('checkfile secrets.env', YELLOW)}        → SHA mismatch shown
+    {c('repairfile secrets.env', YELLOW)}       → restored to original
+    {c('scanfiles', YELLOW)}                    → all files intact again
+
   Test access control:
     {c('logout', YELLOW)}
     {c('todos 1', YELLOW)}                      → encrypted + logged
@@ -574,6 +729,14 @@ COMMANDS = {
     "failed-auth": cmd_failed_auth,
     "delete":      cmd_delete,
     "restore":     cmd_restore,
+    "files":       cmd_files,
+    "file":        cmd_file,
+    "writefile":   cmd_writefile,
+    "deletefile":  cmd_deletefile,
+    "checkfile":   cmd_checkfile,
+    "scanfiles":   cmd_scanfiles,
+    "repairfile":  cmd_repairfile,
+    "resetfiles":  cmd_resetfiles,
     "status":      cmd_status,
     "help":        cmd_help,
 }
