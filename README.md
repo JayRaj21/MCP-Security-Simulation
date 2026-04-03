@@ -99,7 +99,7 @@ Five pre-loaded demo files simulate sensitive server data (`config.json`, `secre
 
 | Command | Description |
 |---------|-------------|
-| `files` | List all demo files with size and integrity status (intact / TAMPERED) |
+| `list` / `files` | List all demo files with size and integrity status (intact / TAMPERED) |
 | `file <name>` | Read a file's content with its current SHA-256 and integrity check |
 | `writefile <name> <content>` | Write/overwrite a file — simulates an attacker tampering with it |
 | `deletefile <name>` | Delete a file from the store |

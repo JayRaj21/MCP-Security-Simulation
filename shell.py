@@ -645,7 +645,7 @@ def cmd_help(_c, _s, _a):
     {c('restore', YELLOW)}                      Restore all soft-deleted resources  [admin]
 
   {c('File integrity  (auth required)', BOLD)}
-    {c('files', YELLOW)}                        List demo files with integrity status
+    {c('list / files', YELLOW)}                 List demo files with integrity status
     {c('file <name>', YELLOW)}                  Read a file with integrity check
     {c('writefile <name> <content>', YELLOW)}   Write/overwrite a file (simulates tampering)
     {c('deletefile <name>', YELLOW)}            Delete a file
@@ -729,6 +729,7 @@ COMMANDS = {
     "failed-auth": cmd_failed_auth,
     "delete":      cmd_delete,
     "restore":     cmd_restore,
+    "list":        cmd_files,
     "files":       cmd_files,
     "file":        cmd_file,
     "writefile":   cmd_writefile,
