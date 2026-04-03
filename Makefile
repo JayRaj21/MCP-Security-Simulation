@@ -9,12 +9,15 @@ $(VENV):
 	$(PIP) install -q -r requirements.txt
 
 # ── targets ───────────────────────────────────────────────────────────────────
-.PHONY: server shell demo help
+.PHONY: webapp server shell demo help
+
+webapp: $(VENV)           ## Start the web UI  (http://127.0.0.1:8080)  ← START HERE
+	$(PYBIN) webapp.py
 
 server: $(VENV)           ## Start the FastMCP server  (http://127.0.0.1:8000/mcp)
 	$(PYBIN) server.py
 
-shell: $(VENV)            ## Open the interactive security shell  ← START HERE
+shell: $(VENV)            ## Open the interactive security shell
 	$(PYBIN) shell.py
 
 demo: $(VENV)             ## Run the automated demo walkthrough (server must be running)
@@ -23,9 +26,10 @@ demo: $(VENV)             ## Run the automated demo walkthrough (server must be 
 # ── default ───────────────────────────────────────────────────────────────────
 help:
 	@echo ""
-	@echo "  Terminal 1:  make server   — start the FastMCP server"
-	@echo "  Terminal 2:  make shell    — open the interactive shell  ← START HERE"
-	@echo "               make demo     — run the automated demo instead"
+	@echo "  make webapp    — start the web UI  (http://127.0.0.1:8080)  ← START HERE"
+	@echo "  make server    — start the FastMCP/MCP server"
+	@echo "  make shell     — open the interactive CLI shell"
+	@echo "  make demo      — run the automated demo (server must be running)"
 	@echo ""
 
 .DEFAULT_GOAL := help
