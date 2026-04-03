@@ -168,6 +168,23 @@ Expected: all access attempts are logged regardless of authentication state.
 
 ---
 
+**6. Attack simulation — automated attacker scenario**
+
+1. Click **⚡ Simulate Attack** in the header (no login required)
+2. The panel runs 7 steps automatically:
+   - Unauthenticated file list → **Blocked** (masked names only)
+   - Unauthenticated file read → **Blocked** (AES-256 ciphertext)
+   - Brute-force login with wrong passwords → **Blocked**
+   - Viewer login with correct credentials → **Visible** (token obtained)
+   - File tamper as viewer → **Visible** (viewer can write)
+   - Audit log read as viewer → **Visible** (viewer can see log)
+   - Viewer logout → token invalidated
+3. After the run, click **View Activity Log** to see every step recorded in the audit trail
+
+Expected: each step is tagged Blocked, Visible, or Exposed with a one-line explanation; the full scenario is captured in the activity log.
+
+---
+
 ## Web API
 
 | Method | Path | Auth | Description |
