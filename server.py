@@ -46,15 +46,17 @@ from auth import AuthManager
 from audit import AuditLogger
 from crypto import CryptoManager
 from backend import BackendAPI
+from filestore import FileStore
 from config import USERS, ENCRYPTION_KEY, SESSION_DURATION
 
 # ---------------------------------------------------------------------------
 # Singletons
 # ---------------------------------------------------------------------------
-_auth    = AuthManager(USERS, SESSION_DURATION)
-_crypto  = CryptoManager(ENCRYPTION_KEY)
-_backend = BackendAPI()
-_audit   = AuditLogger()
+_auth      = AuthManager(USERS, SESSION_DURATION)
+_crypto    = CryptoManager(ENCRYPTION_KEY)
+_backend   = BackendAPI()
+_audit     = AuditLogger()
+_filestore = FileStore()
 
 
 # ---------------------------------------------------------------------------
@@ -608,6 +610,268 @@ def restore_all(session_token: str) -> dict:
         "status": "success",
         "message": f"All resources restored to original state.",
         "restored": counts,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool: list_files
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def list_files(session_token: str) -> dict:
+    """List all demo files in the file store, including their integrity status.
+
+    Each entry includes the file name, size, a truncated SHA-256 hash, and
+    whether the file is intact (matches original) or has been tampered with.
+
+    Requires authentication.
+    """
+    session = _auth.verify_session(session_token)
+    if not session:
+        _audit.record(None, False, "list_files", "filestore", "denied — not authenticated")
+        return {"status": "error", "message": "Authentication required."}
+
+    files = _filestore.list_files()
+    _audit.record(session["username"], True, "list_files", "filestore",
+                  f"success ({len(files)} files)")
+    return {"status": "success", "files": files}
+
+
+# ---------------------------------------------------------------------------
+# Tool: read_file
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def read_file(filename: str, session_token: str) -> dict:
+    """Read the content of a demo file from the file store.
+
+    Returns the file content along with its SHA-256 hash and whether it
+    matches the original (intact vs tampered).
+
+    Requires authentication.
+    """
+    session = _auth.verify_session(session_token)
+    if not session:
+        _audit.record(None, False, "read_file", f"filestore/{filename}",
+                      "denied — not authenticated")
+        return {"status": "error", "message": "Authentication required."}
+
+    try:
+        content, sha = _filestore.read_file(filename)
+        integrity = _filestore.check_integrity(filename)
+    except KeyError as e:
+        _audit.record(session["username"], True, "read_file", f"filestore/{filename}",
+                      f"error: {e}")
+        return {"status": "error", "message": str(e)}
+
+    _audit.record(session["username"], True, "read_file", f"filestore/{filename}", "success")
+    return {
+        "status": "success",
+        "filename": filename,
+        "content": content,
+        "sha256": sha,
+        "intact": integrity["intact"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool: write_file
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def write_file(filename: str, content: str, session_token: str) -> dict:
+    """Write or overwrite a file in the demo file store.
+
+    Use this to simulate an attacker tampering with a sensitive file.
+    After writing, check_file_integrity will report the file as tampered.
+    Use repair_file or reset_files to restore it.
+
+    Requires authentication.
+    """
+    session = _auth.verify_session(session_token)
+    if not session:
+        _audit.record(None, False, "write_file", f"filestore/{filename}",
+                      "denied — not authenticated")
+        return {"status": "error", "message": "Authentication required."}
+
+    new_sha = _filestore.write_file(filename, content)
+    _audit.record(session["username"], True, "write_file", f"filestore/{filename}",
+                  f"written — sha256={new_sha[:16]}…")
+    return {
+        "status": "success",
+        "message": f"'{filename}' written ({len(content.encode())} bytes).",
+        "sha256": new_sha,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool: delete_file
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def delete_file(filename: str, session_token: str) -> dict:
+    """Delete a file from the demo file store.
+
+    Use repair_file or reset_files to restore deleted original files.
+
+    Requires authentication.
+    """
+    session = _auth.verify_session(session_token)
+    if not session:
+        _audit.record(None, False, "delete_file", f"filestore/{filename}",
+                      "denied — not authenticated")
+        return {"status": "error", "message": "Authentication required."}
+
+    try:
+        _filestore.delete_file(filename)
+    except KeyError as e:
+        _audit.record(session["username"], True, "delete_file", f"filestore/{filename}",
+                      f"error: {e}")
+        return {"status": "error", "message": str(e)}
+
+    _audit.record(session["username"], True, "delete_file", f"filestore/{filename}", "deleted")
+    return {
+        "status": "success",
+        "message": f"'{filename}' deleted. Call repair_file or reset_files to restore.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool: check_file_integrity
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def check_file_integrity(filename: str, session_token: str) -> dict:
+    """Check whether a file's current content matches its original SHA-256 hash.
+
+    Returns intact=True if the file is unchanged, intact=False if it has been
+    tampered with (content modified), and intact=None if the file has no
+    original (it was created after startup).
+
+    Requires authentication.
+    """
+    session = _auth.verify_session(session_token)
+    if not session:
+        _audit.record(None, False, "check_file_integrity", f"filestore/{filename}",
+                      "denied — not authenticated")
+        return {"status": "error", "message": "Authentication required."}
+
+    try:
+        result = _filestore.check_integrity(filename)
+    except KeyError as e:
+        _audit.record(session["username"], True, "check_file_integrity",
+                      f"filestore/{filename}", f"error: {e}")
+        return {"status": "error", "message": str(e)}
+
+    verdict = (
+        "intact" if result["intact"] is True
+        else "TAMPERED" if result["intact"] is False
+        else "new file (no original)"
+    )
+    _audit.record(session["username"], True, "check_file_integrity",
+                  f"filestore/{filename}", verdict)
+    return {
+        "status": "success",
+        "filename": filename,
+        "intact": result["intact"],
+        "verdict": verdict,
+        "current_sha256": result["current_sha"],
+        "original_sha256": result["original_sha"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool: detect_tampered_files
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def detect_tampered_files(session_token: str) -> dict:
+    """Scan all files and return a list of those whose content has been modified.
+
+    Any file whose current SHA-256 hash differs from the original is reported
+    as tampered. Use repair_file or reset_files to restore them.
+
+    Requires authentication.
+    """
+    session = _auth.verify_session(session_token)
+    if not session:
+        _audit.record(None, False, "detect_tampered_files", "filestore",
+                      "denied — not authenticated")
+        return {"status": "error", "message": "Authentication required."}
+
+    tampered = _filestore.detect_tampered()
+    _audit.record(session["username"], True, "detect_tampered_files", "filestore",
+                  f"{len(tampered)} tampered file(s)")
+    return {
+        "status": "success",
+        "tampered_count": len(tampered),
+        "tampered_files": tampered,
+        "verdict": (
+            "All files are intact." if not tampered
+            else f"{len(tampered)} file(s) have been tampered with: {', '.join(tampered)}"
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool: repair_file
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def repair_file(filename: str, session_token: str) -> dict:
+    """Restore a single file to its original content.
+
+    Overwrites the current (potentially tampered) content with the pre-loaded
+    original.  Does nothing if the file name is not one of the five originals.
+
+    Requires admin role.
+    """
+    session = _auth.verify_session(session_token)
+    if not session:
+        _audit.record(None, False, "repair_file", f"filestore/{filename}",
+                      "denied — not authenticated")
+        return {"status": "error", "message": "Authentication required."}
+    if session["role"] != "admin":
+        _audit.record(session["username"], True, "repair_file", f"filestore/{filename}",
+                      "denied — admin only")
+        return {"status": "error", "message": "Admin role required."}
+
+    restored = _filestore.repair_file(filename)
+    if not restored:
+        return {
+            "status": "error",
+            "message": f"No original content for '{filename}'. Use reset_files to restore all originals.",
+        }
+
+    _audit.record(session["username"], True, "repair_file", f"filestore/{filename}", "restored")
+    return {
+        "status": "success",
+        "message": f"'{filename}' has been restored to its original content.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool: reset_files
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def reset_files(session_token: str) -> dict:
+    """Restore all demo files to their original content.
+
+    Overwrites every file with its pre-loaded original and removes any files
+    that were created after startup.  Equivalent to a server restart for the
+    file store only.
+
+    Requires admin role.
+    """
+    session = _auth.verify_session(session_token)
+    if not session:
+        _audit.record(None, False, "reset_files", "filestore", "denied — not authenticated")
+        return {"status": "error", "message": "Authentication required."}
+    if session["role"] != "admin":
+        _audit.record(session["username"], True, "reset_files", "filestore",
+                      "denied — admin only")
+        return {"status": "error", "message": "Admin role required."}
+
+    restored = _filestore.reset_all()
+    _audit.record(session["username"], True, "reset_files", "filestore",
+                  f"restored {len(restored)} file(s)")
+    return {
+        "status": "success",
+        "message": f"All {len(restored)} demo files restored to original content.",
+        "files": restored,
     }
 
 
