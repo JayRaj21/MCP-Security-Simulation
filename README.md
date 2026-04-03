@@ -1,14 +1,11 @@
 # MCP Security Gateway
 
-A zero-trust MCP gateway that sits between MCP clients and a live backend REST API. Every request is independently authenticated. Unauthenticated callers receive AES-256-CBC ciphertext. Authenticated callers receive plaintext JSON with HMAC-SHA256 integrity signatures. All access attempts are recorded in an audit log.
+A zero-trust security gateway with two interfaces:
 
-```
-MCP Client  ──►  MCP Gateway (this project)  ──►  JSONPlaceholder REST API
-                 • auth / zero-trust                (live external data)
-                 • AES-256 encryption
-                 • HMAC-SHA256 signing
-                 • audit logging
-```
+- **Web UI (v3)** — browser-based file management dashboard with live activity log
+- **MCP gateway (v2)** — FastMCP server proxying the JSONPlaceholder REST API via the MCP protocol
+
+Both interfaces share the same security model: every request is independently authenticated, unauthenticated callers receive AES-256-CBC ciphertext, authenticated callers receive plaintext with HMAC-SHA256 integrity signatures, and all access attempts are recorded in an audit log.
 
 ---
 
@@ -17,32 +14,28 @@ MCP Client  ──►  MCP Gateway (this project)  ──►  JSONPlaceholder RE
 **Prerequisites:** Python 3.8+
 
 ```bash
-# Terminal 1 — start the gateway server
-make server
+# Web UI — open http://127.0.0.1:8080 in your browser  ← START HERE
+make webapp
 
-# Terminal 2 — open the interactive shell
-make shell
-
-# Terminal 2 (alternative) — run the automated 12-step demo instead
-make demo
+# MCP gateway (separate terminal pair)
+make server   # Terminal 1
+make shell    # Terminal 2
+make demo     # Terminal 2 (automated demo instead of shell)
 ```
-
-The server listens at `http://127.0.0.1:8000/mcp`. The backend is the public [JSONPlaceholder](https://jsonplaceholder.typicode.com) API (no API key required).
 
 ---
 
-## Security features demonstrated
+## Security features
 
 | Feature | What it does |
 |---------|--------------|
-| Zero-trust auth | Every tool call verifies the session token independently — no implicit trust |
+| Zero-trust auth | Every request verifies the session token independently — no implicit trust |
 | AES-256-CBC encryption | Unauthenticated callers receive an encrypted blob, not readable data |
 | HMAC-SHA256 signing | Authenticated responses include a signature for tamper detection |
-| Integrity verification | Re-fetch a resource live and compare its HMAC against a saved value |
-| File integrity monitoring | SHA-256 tracks whether demo files have been tampered with |
-| File regeneration | Tampered or deleted files can be restored to original content; all files reset on server start |
-| Audit log | All access attempts (including unauthenticated ones) recorded and queryable |
-| Session management | Short-lived tokens (1 hour), revocable via logout |
+| Integrity verification | SHA-256 hash comparison detects modified or tampered files |
+| File regeneration | Tampered or deleted files are restored on server start; manual repair also available |
+| Activity log | Every access attempt (authenticated or not) is recorded and queryable |
+| Session management | Short-lived tokens (1 hour), revocable at any time |
 
 ---
 
@@ -53,26 +46,122 @@ The server listens at `http://127.0.0.1:8000/mcp`. The backend is the public [JS
 | `admin`  | `admin123` | admin |
 | `viewer` | `view456`  | viewer |
 
-Override at runtime via environment variables: `ADMIN_PASSWORD`, `VIEWER_PASSWORD`.
+Override at runtime: `ADMIN_PASSWORD`, `VIEWER_PASSWORD`.
 
 ---
 
-## Interactive shell commands
+## Web UI (`make webapp`)
 
-Start the shell with `make shell`, then use any of these commands:
+Open `http://127.0.0.1:8080` in a browser.
 
-### Resource commands
+### Layout
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  🔒 MCP Security Gateway            [● admin (admin)] [Logout] │
+├─────────────────┬───────────────────────────────────────────┤
+│  FILE STORE  5  │  secrets.env         [⚠ TAMPERED]         │
+│  ─────────────  │  ─────────────────────────────────────     │
+│  ● config.json  │  DATABASE_URL=postgresql://...             │
+│  ⚠ secrets.env  │  ...                                       │
+│  ● user_db.csv  │                [🔍 Check][↺ Repair][🗑 Del] │
+│  ● audit.txt    │                                            │
+│  ● enc_keys.txt │                                            │
+│  ─────────────  │                                            │
+│  [＋ Add File]  │                                            │
+│  [⚡ Scan][↺ Reset]                                          │
+├─────────────────┴───────────────────────────────────────────┤
+│  ACTIVITY LOG                                    [↻]         │
+│  14:05:22  admin  write_file  filestore/secrets  written…    │
+│  14:05:10  admin  list_files  filestore          success…    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Zero-trust behaviour
+
+| State | File list | File content | Activity log |
+|-------|-----------|--------------|--------------|
+| Not logged in | File count shown; names masked as `████████████` | AES-256 encrypted blob | Hidden |
+| Logged in (viewer) | Real names + integrity dots | Plaintext + integrity badge | Visible |
+| Logged in (admin) | Same + Repair / Reset All buttons | Same + Repair button on tampered files | Visible |
+
+### File actions
+
+| Button / action | Who | What it does |
+|-----------------|-----|-------------|
+| Select file | any auth | View content; integrity badge shown |
+| ✏️ Edit → 💾 Save | any auth | Modify file content in-browser |
+| 🗑 Delete | any auth | Remove file from store |
+| 🔍 Check | any auth | Re-hash and compare against original SHA-256 |
+| ↺ Repair | admin | Restore one file to its original content |
+| ＋ Add File | any auth | Create a new file with custom content |
+| ⚡ Scan | any auth | Scan all files for hash mismatches |
+| ↺ Reset All | admin | Restore every file to original content |
+
+### Demo walkthrough
+
+**See encryption in action:**
+1. Open the page without logging in — file names are masked, count is visible
+2. Click a masked file — content shown as AES-256 encrypted blob
+3. Click **Login** → `admin` / `admin123`
+4. File names and content are now readable
+
+**Test file integrity monitoring:**
+1. Log in as admin
+2. Select `secrets.env` → Edit → change a line → Save
+3. The sidebar dot turns red; the file header shows `⚠ TAMPERED`
+4. Click **↺ Repair** → file restored, dot turns green
+5. Or click **⚡ Scan** to find all tampered files at once
+
+**Test access control:**
+1. Log out
+2. Try clicking any file — encrypted content is returned and logged
+3. Log in → **Activity Log** shows the unauthenticated attempts
+
+---
+
+## Demo files
+
+Five pre-populated files simulate sensitive server data.  
+All files are **automatically restored to original content on every server start**.
+
+| File | Contents |
+|------|---------|
+| `config.json` | Server config with database credentials and API keys |
+| `secrets.env` | Environment variables including AWS keys and OAuth secrets |
+| `user_database.csv` | User records with password hashes and API tokens |
+| `audit_log.txt` | Historical access log with brute-force attempt example |
+| `encryption_keys.txt` | Key rotation schedule (AES-256-GCM, break-glass key) |
+
+---
+
+## Interactive shell (`make shell`)
+
+Start the server first (`make server`), then open the shell.
+
+### File integrity commands (auth required)
 
 | Command | Description |
 |---------|-------------|
-| `users` | List all users from the backend API |
-| `user <id>` | Fetch a single user profile (ID 1–10) |
-| `posts [user_id]` | List posts, optionally filtered by user (100 total, 10 per user) |
-| `post <id>` | Fetch a single post (ID 1–100) |
-| `todos [user_id]` | List todos with completion status (200 total, 20 per user) |
-| `todo <id>` | Fetch a single todo (ID 1–200) |
+| `list` / `files` | List all demo files with integrity status |
+| `file <name>` | Read a file with SHA-256 and integrity check |
+| `writefile <name> <content>` | Write/overwrite a file |
+| `deletefile <name>` | Delete a file |
+| `checkfile <name>` | Compare SHA-256 against original |
+| `scanfiles` | Scan all files and report tampered ones |
+| `repairfile <name>` | Restore one file to original _(admin only)_ |
+| `resetfiles` | Restore all files to original _(admin only)_ |
 
-When unauthenticated, resource commands return an AES-256 encrypted blob. After logging in, they return plaintext data.
+### Resource commands (JSONPlaceholder proxy)
+
+| Command | Description |
+|---------|-------------|
+| `users` | List all users (encrypted when logged out) |
+| `user <id>` | Fetch a single user profile (ID 1–10) |
+| `posts [user_id]` | List posts, optionally filtered by user |
+| `post <id>` | Fetch a single post (ID 1–100) |
+| `todos [user_id]` | List todos with completion status |
+| `todo <id>` | Fetch a single todo (ID 1–200) |
 
 ### Auth commands
 
@@ -80,41 +169,22 @@ When unauthenticated, resource commands return an AES-256 encrypted blob. After 
 |---------|-------------|
 | `login <user> <pass>` | Authenticate and receive a session token |
 | `logout` | Invalidate the current session token |
-| `status` | Show current auth state (token, username) |
+| `status` | Show auth state and saved signatures |
 
 ### Delete / restore commands (auth required)
 
-Deletions are soft-delete only — held in memory, not sent to the backend. All deletions are automatically cleared when the server restarts.
-
 | Command | Description |
 |---------|-------------|
-| `delete user <id>` | Soft-delete a user — hidden from all subsequent calls |
-| `delete post <id>` | Soft-delete a post |
-| `delete todo <id>` | Soft-delete a todo |
-| `restore` | Restore all soft-deleted resources to original state _(admin only)_ |
-
-### File integrity commands (auth required)
-
-Five pre-loaded demo files simulate sensitive server data (`config.json`, `secrets.env`, `user_database.csv`, `audit_log.txt`, `encryption_keys.txt`). All files are automatically restored to their original content on every server start.
-
-| Command | Description |
-|---------|-------------|
-| `list` / `files` | List all demo files with size and integrity status (intact / TAMPERED) |
-| `file <name>` | Read a file's content with its current SHA-256 and integrity check |
-| `writefile <name> <content>` | Write/overwrite a file — simulates an attacker tampering with it |
-| `deletefile <name>` | Delete a file from the store |
-| `checkfile <name>` | Compare a file's SHA-256 against its original — reports intact or TAMPERED |
-| `scanfiles` | Scan all files and list every one that has been tampered with |
-| `repairfile <name>` | Restore a single file to its original content _(admin only)_ |
-| `resetfiles` | Restore all files to original content _(admin only)_ |
+| `delete user/post/todo <id>` | Soft-delete a resource |
+| `restore` | Restore all soft-deleted resources _(admin only)_ |
 
 ### API integrity commands
 
 | Command | Description |
 |---------|-------------|
-| `sign <type> <id>` | Fetch a resource and save its HMAC signature |
-| `verify <type> <id>` | Re-fetch a resource and check it matches the saved HMAC |
-| `tampertest <type> <id>` | Corrupt a saved HMAC and verify tamper detection fires |
+| `sign <type> <id>` | Save a resource HMAC-SHA256 signature |
+| `verify <type> <id>` | Re-fetch and verify the HMAC |
+| `tampertest <type> <id>` | Corrupt the signature to trigger detection |
 
 `<type>` is one of: `user`, `post`, `todo`
 
@@ -124,52 +194,36 @@ Five pre-loaded demo files simulate sensitive server data (`config.json`, `secre
 |---------|-------------|
 | `audit` | View unauthorized access attempts |
 | `audit --all` | View all access attempts |
-| `failed-auth` | View only failed login attempts _(admin only)_ |
+| `failed-auth` | View failed login attempts _(admin only)_ |
 
 ### Session management (admin only)
 
 | Command | Description |
 |---------|-------------|
-| `sessions` | List all active sessions (token prefix, username, role, expiry) |
-| `kick <username>` | Immediately revoke all sessions for a given user |
-
-### Other
-
-| Command | Description |
-|---------|-------------|
-| `help` | Show all commands |
-| `exit` | Quit |
+| `sessions` | List all active sessions |
+| `kick <username>` | Force-logout all sessions for a user |
 
 ---
 
-## Automated demo (`make demo`)
+## Web API endpoints
 
-Runs 12 steps non-interactively:
-
-1. `list_users()` unauthenticated → encrypted blob
-2. `get_user(3)` unauthenticated → encrypted blob
-3. Authenticate as `admin` → receive session token
-4. `list_users(token)` → plaintext user list
-5. `get_user(3, token)` → full user profile
-6. `list_posts(user_id=3, token)` → that user's 10 posts
-7. `get_post(1, token)` → single post in full
-8. `list_todos(user_id=1, token)` → todos with completion status
-9. Sign user 3's response, verify it → HMAC intact
-10. Corrupt the HMAC → tamper detection fires
-11. `get_audit_log(unauthorized_only=True)` → shows steps 1 and 2
-12. Logout → token invalidated
-
-Run with `--auto` to skip the Enter-to-continue prompts:
-
-```bash
-.venv/bin/python demo_client.py --auto
-```
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/auth/login` | — | Authenticate; returns session token |
+| `POST` | `/api/auth/logout` | required | Invalidate session |
+| `GET` | `/api/files` | optional | List files (names masked if unauthenticated) |
+| `GET` | `/api/files/{name}` | optional | Read file (encrypted if unauthenticated) |
+| `PUT` | `/api/files/{name}` | required | Write / create a file |
+| `DELETE` | `/api/files/{name}` | required | Delete a file |
+| `GET` | `/api/files/{name}/integrity` | required | Check SHA-256 against original |
+| `POST` | `/api/files/{name}/repair` | admin | Restore one file to original |
+| `GET` | `/api/scan` | required | Scan all files for tampering |
+| `POST` | `/api/reset` | admin | Restore all files to original |
+| `GET` | `/api/activity` | required | Full activity log (most recent first) |
 
 ---
 
-## MCP tools (server API)
-
-These are the tools exposed over the MCP protocol, callable by any MCP client:
+## MCP tools (FastMCP server API)
 
 | Tool | Parameters | Description |
 |------|------------|-------------|
@@ -181,21 +235,21 @@ These are the tools exposed over the MCP protocol, callable by any MCP client:
 | `get_post` | `post_id`, `session_token=""` | Single post by ID (1–100) |
 | `list_todos` | `user_id=0`, `session_token=""` | Todos; `user_id=0` returns all |
 | `get_todo` | `todo_id`, `session_token=""` | Single todo by ID (1–200) |
-| `delete_user` | `user_id`, `session_token` | Soft-delete a user (auth required) |
-| `delete_post` | `post_id`, `session_token` | Soft-delete a post (auth required) |
-| `delete_todo` | `todo_id`, `session_token` | Soft-delete a todo (auth required) |
+| `delete_user` | `user_id`, `session_token` | Soft-delete a user |
+| `delete_post` | `post_id`, `session_token` | Soft-delete a post |
+| `delete_todo` | `todo_id`, `session_token` | Soft-delete a todo |
 | `restore_all` | `session_token` | Clear all soft-deletes (admin only) |
 | `verify_integrity` | `resource_type`, `resource_id`, `expected_hmac`, `session_token` | Re-fetches resource and compares HMAC |
-| `get_audit_log` | `session_token`, `unauthorized_only=False` | Audit log (auth required) |
-| `get_failed_auth_attempts` | `session_token` | Failed login attempts only (admin only) |
-| `list_active_sessions` | `session_token` | All live sessions with metadata (admin only) |
+| `get_audit_log` | `session_token`, `unauthorized_only=False` | Audit log |
+| `get_failed_auth_attempts` | `session_token` | Failed logins only (admin only) |
+| `list_active_sessions` | `session_token` | All live sessions (admin only) |
 | `force_logout_user` | `target_username`, `session_token` | Revoke all sessions for a user (admin only) |
-| `list_files` | `session_token` | List demo files with integrity status (auth required) |
-| `read_file` | `filename`, `session_token` | Read a file's content and integrity check (auth required) |
-| `write_file` | `filename`, `content`, `session_token` | Write/overwrite a file — simulates tampering (auth required) |
-| `delete_file` | `filename`, `session_token` | Delete a demo file (auth required) |
-| `check_file_integrity` | `filename`, `session_token` | Compare file SHA-256 to original (auth required) |
-| `detect_tampered_files` | `session_token` | Scan all files and return tampered ones (auth required) |
+| `list_files` | `session_token` | List demo files with integrity status |
+| `read_file` | `filename`, `session_token` | Read file content and integrity |
+| `write_file` | `filename`, `content`, `session_token` | Write / overwrite a file |
+| `delete_file` | `filename`, `session_token` | Delete a demo file |
+| `check_file_integrity` | `filename`, `session_token` | Compare SHA-256 to original |
+| `detect_tampered_files` | `session_token` | Scan all files for tampering |
 | `repair_file` | `filename`, `session_token` | Restore one file to original (admin only) |
 | `reset_files` | `session_token` | Restore all files to original (admin only) |
 
@@ -205,17 +259,20 @@ These are the tools exposed over the MCP protocol, callable by any MCP client:
 
 ```
 MCP-Security-Simulation/
-├── server.py          # FastMCP gateway — all tools, auth enforcement, response wrapping
-├── shell.py           # Interactive REPL client for testing the gateway
-├── demo_client.py     # Automated 12-step demo walkthrough
+├── webapp.py          # FastAPI web server — REST API + serves the SPA
+├── static/
+│   └── index.html     # Single-page web UI (zero-trust file manager + activity log)
+├── server.py          # FastMCP gateway — MCP protocol tools
+├── shell.py           # Interactive CLI client for the MCP gateway
+├── demo_client.py     # Automated 12-step MCP demo walkthrough
+├── filestore.py       # In-memory file store with SHA-256 integrity monitoring
 ├── backend.py         # HTTP wrapper around the JSONPlaceholder REST API
-├── filestore.py       # In-memory file store with integrity monitoring and repair
 ├── auth.py            # AuthManager — bcrypt password hashing, session tokens
 ├── crypto.py          # CryptoManager — AES-256-CBC encryption, HMAC-SHA256 signing
 ├── audit.py           # AuditLogger — circular in-memory buffer of access events
 ├── config.py          # User registry, encryption key, session duration
 ├── requirements.txt   # Python dependencies
-└── Makefile           # make server / make shell / make demo
+└── Makefile           # make webapp / make server / make shell / make demo
 ```
 
 ---
