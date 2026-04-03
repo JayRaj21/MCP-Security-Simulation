@@ -47,11 +47,11 @@ header {
 .logo-icon { font-size: 17px; }
 .header-spacer { flex: 1; }
 .badge {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 2px 9px; border-radius: 12px;
-  font-size: 11px; font-weight: 600; letter-spacing: .4px;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 12px; border-radius: 12px;
+  font-size: 13px; font-weight: 500; letter-spacing: .2px;
 }
-.b-unauth { background: rgba(110,118,129,.15); color: var(--dim);   border: 1px solid rgba(110,118,129,.3); }
+.b-unauth { background: rgba(110,118,129,.15); color: var(--text);   border: 1px solid rgba(110,118,129,.3); }
 .b-admin  { background: rgba(88,166,255,.12);  color: var(--accent); border: 1px solid rgba(88,166,255,.3); }
 .b-viewer { background: rgba(63,185,80,.1);    color: var(--green);  border: 1px solid rgba(63,185,80,.3); }
 
@@ -87,12 +87,12 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 }
 .sidebar-hdr {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 12px 8px;
-  font-size: 10px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: .9px; color: var(--dim);
+  padding: 10px 12px 9px;
+  font-size: 12px; font-weight: 600;
+  color: var(--text);
   border-bottom: 1px solid var(--border);
 }
-.sidebar-hdr .cnt { color: var(--accent); font-size: 12px; font-weight: 600; }
+.sidebar-hdr .cnt { color: var(--dim); font-size: 12px; font-weight: 400; margin-left: 4px; }
 #file-list { flex: 1; overflow-y: auto; padding: 4px 0; }
 .file-item {
   display: flex; align-items: center; gap: 7px;
@@ -102,7 +102,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 }
 .file-item:hover { background: var(--surface2); }
 .file-item.active { background: rgba(88,166,255,.1); border-left-color: var(--accent); }
-.file-item.masked { cursor: default; color: var(--dim); font-family: var(--mono); font-size: 11px; }
+.file-item.masked { cursor: default; color: var(--text-dim, #8b949e); font-family: var(--mono); font-size: 13px; }
 .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .d-ok  { background: var(--green); }
 .d-bad { background: var(--red); }
@@ -196,32 +196,44 @@ textarea.editor:focus { border-color: var(--accent); }
   border-bottom: 1px solid var(--border);
 }
 .activity-title {
-  font-size: 10px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: .9px; color: var(--dim); flex: 1;
+  font-size: 12px; font-weight: 600;
+  color: var(--text); flex: 1;
+}
+.log-col-hdr {
+  display: flex; gap: 8px; align-items: center;
+  padding: 4px 16px 5px;
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .6px; color: var(--dim);
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
 #log {
   flex: 1; overflow-y: auto;
-  font-family: var(--mono); font-size: 11.5px; padding: 2px 0;
+  font-size: 13px; padding: 2px 0;
 }
 .le {
   display: flex; align-items: baseline; gap: 8px;
-  padding: 2.5px 16px; transition: background .1s;
+  padding: 4px 16px; transition: background .1s;
 }
 .le:hover     { background: var(--surface2); }
-.lt           { color: var(--dim); flex-shrink: 0; width: 56px; }
-.lu           { color: var(--accent); flex-shrink: 0; width: 68px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.la           { color: var(--text); flex-shrink: 0; width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lr           { color: var(--dim); flex-shrink: 0; width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lt           { color: var(--dim); flex-shrink: 0; width: 60px; }
+.lu           { color: var(--accent); flex-shrink: 0; width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.la           { color: var(--text); flex-shrink: 0; width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lr           { color: var(--dim); flex-shrink: 0; width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lo           { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lo.ok        { color: var(--green); }
-.lo.bad       { color: var(--red);    font-weight: 700; }
+.lo.bad       { color: var(--red);    font-weight: 600; }
 .lo.warn      { color: var(--yellow); }
 .lo.err       { color: var(--red); }
 .lo.muted     { color: var(--dim); }
-.unauth-tag   { color: var(--yellow); font-size: 10px; margin-right: 3px; }
+.unauth-tag   {
+  display: inline-block; font-size: 11px; font-weight: 600;
+  color: var(--yellow); background: rgba(210,153,34,.12);
+  border: 1px solid rgba(210,153,34,.3); border-radius: 4px;
+  padding: 0 5px; margin-right: 5px; letter-spacing: .2px;
+}
 .log-locked   {
   display: flex; align-items: center; justify-content: center;
-  height: 100%; color: var(--dim); gap: 8px; font-size: 12px;
+  height: 100%; color: var(--dim); gap: 8px; font-size: 13px;
 }
 
 /* ── Login modal ─────────────────────────────────────────────────────────── */
@@ -275,7 +287,7 @@ textarea.editor:focus { border-color: var(--accent); }
 <header>
   <div class="logo"><span class="logo-icon">🔒</span> MCP Security Gateway</div>
   <div class="header-spacer"></div>
-  <span id="auth-badge" class="badge b-unauth">⚪ Not authenticated</span>
+  <span id="auth-badge" class="badge b-unauth">Not signed in</span>
   <button id="btn-login"  onclick="showLogin()">Login</button>
   <button id="btn-logout" class="hidden danger" onclick="doLogout()">Logout</button>
 </header>
@@ -286,7 +298,7 @@ textarea.editor:focus { border-color: var(--accent); }
   <!-- Sidebar -->
   <aside class="sidebar">
     <div class="sidebar-hdr">
-      File Store <span class="cnt" id="file-count">—</span>
+      Files <span class="cnt" id="file-count"></span>
     </div>
     <div id="file-list"></div>
     <div id="sidebar-btns" class="sidebar-btns hidden">
@@ -331,6 +343,13 @@ textarea.editor:focus { border-color: var(--accent); }
   <div class="activity-hdr">
     <span class="activity-title">Activity Log</span>
     <button id="btn-refresh-log" class="hidden" onclick="loadActivity()" title="Refresh activity log">↻</button>
+  </div>
+  <div class="log-col-hdr" id="log-col-hdr" style="display:none">
+    <span class="lt">Time</span>
+    <span class="lu">User</span>
+    <span class="la">Action</span>
+    <span class="lr">File</span>
+    <span class="lo">Result</span>
   </div>
   <div id="log">
     <div class="log-locked">Log in to view the activity log</div>
@@ -426,7 +445,7 @@ function updateAuthUI() {
   if (S.token) {
     const cls = S.role === 'admin' ? 'b-admin' : 'b-viewer';
     badge.className = `badge ${cls}`;
-    badge.textContent = `● ${S.user} (${S.role})`;
+    badge.textContent = `${S.user} · ${S.role === 'admin' ? 'Admin' : 'Viewer'}`;
     btnLogin.classList.add('hidden');
     btnLogout.classList.remove('hidden');
     sbtns.classList.remove('hidden');
@@ -435,7 +454,7 @@ function updateAuthUI() {
     else btnReset.classList.add('hidden');
   } else {
     badge.className = 'badge b-unauth';
-    badge.textContent = '⚪ Not authenticated';
+    badge.textContent = 'Not signed in';
     btnLogin.classList.remove('hidden');
     btnLogout.classList.add('hidden');
     sbtns.classList.add('hidden');
@@ -446,7 +465,7 @@ function updateAuthUI() {
 // ── File list ──────────────────────────────────────────────────────────────
 async function loadFiles() {
   const d = await api('GET', '/api/files');
-  document.getElementById('file-count').textContent = d.count;
+  document.getElementById('file-count').textContent = `(${d.count})`;
   const list = document.getElementById('file-list');
   list.innerHTML = '';
 
@@ -651,28 +670,69 @@ async function doReset() {
 }
 
 // ── Activity log ───────────────────────────────────────────────────────────
+const ACTION_LABELS = {
+  authenticate:     'Sign In',
+  logout:           'Sign Out',
+  list_files:       'List Files',
+  read_file:        'Read File',
+  write_file:       'Edit File',
+  create_file:      'Create File',
+  delete_file:      'Delete File',
+  check_integrity:  'Check Integrity',
+  repair_file:      'Repair File',
+  scan_files:       'Scan Files',
+  reset_files:      'Reset Files',
+  read_activity:    'View Log',
+};
+
+function cleanOutcome(out) {
+  if (!out) return '—';
+  if (/^success/.test(out))               return 'Success';
+  if (/^written/.test(out))               return 'Saved';
+  if (out === 'deleted')                   return 'Deleted';
+  if (out === 'restored')                  return 'Restored';
+  if (out === 'intact')                    return 'Intact';
+  if (/TAMPERED/.test(out))               return 'Tampered';
+  if (out === 'invalid credentials')       return 'Wrong credentials';
+  if (/denied — not authenticated/.test(out)) return 'Not signed in';
+  if (/denied — admin only/.test(out))    return 'Admin required';
+  if (/^error/.test(out))                 return 'Error';
+  if (/^revoked (\d+)/.test(out))         return out.replace('session(s)', 'sessions');
+  // strip sha hashes and raw counts from other messages
+  return out.replace(/ — sha=\w+…/, '').replace(/ \(\d+ (?:files?|entries?)\)/, '').trim();
+}
+
+function cleanResource(raw) {
+  if (!raw) return '—';
+  if (raw === 'session' || raw === 'audit_log') return '—';
+  return raw.replace('filestore/', '');
+}
+
 async function loadActivity() {
   if (!S.token) return;
   const d = await api('GET', '/api/activity');
   if (d.status !== 'success') return;
   const log = document.getElementById('log');
+  const hdr = document.getElementById('log-col-hdr');
   if (!d.entries || d.entries.length === 0) {
-    log.innerHTML = '<div style="padding:10px 16px;color:var(--dim);font-size:12px;">No activity yet</div>';
+    hdr.style.display = 'none';
+    log.innerHTML = '<div style="padding:10px 16px;color:var(--dim);font-size:13px;">No activity yet</div>';
     return;
   }
+  hdr.style.display = '';
   log.innerHTML = d.entries.slice(0, 120).map(e => {
-    const time = e.timestamp.substring(11, 19);
-    const user = (e.username || '').substring(0, 11);
-    const action = (e.action || '').substring(0, 18);
-    const res = (e.resource || '').substring(0, 22);
-    const out = e.outcome || '';
+    const time   = e.timestamp.substring(11, 19);
+    const user   = (e.username || 'anonymous').substring(0, 12);
+    const action = ACTION_LABELS[e.action] || (e.action || '').substring(0, 18);
+    const res    = cleanResource(e.resource).substring(0, 22);
+    const out    = cleanOutcome(e.outcome);
     let oc = 'muted';
-    if (/^success/.test(out) || out === 'intact' || out === 'restored') oc = 'ok';
-    else if (/TAMPERED/.test(out)) oc = 'bad';
-    else if (/denied|DENIED|invalid/.test(out)) oc = 'warn';
-    else if (/error/.test(out)) oc = 'err';
-    else if (/written|deleted|restored|revoked/.test(out)) oc = 'ok';
-    const utag = e.authenticated ? '' : '<span class="unauth-tag">[UNAUTH]</span>';
+    if (out === 'Success' || out === 'Intact' || out === 'Restored' || out === 'Saved') oc = 'ok';
+    else if (out === 'Tampered')                 oc = 'bad';
+    else if (/Wrong|required|Not signed/.test(out)) oc = 'warn';
+    else if (out === 'Error')                    oc = 'err';
+    else if (out === 'Deleted')                  oc = 'ok';
+    const utag = e.authenticated ? '' : '<span class="unauth-tag">UNAUTH</span>';
     return `<div class="le">
       <span class="lt">${time}</span>
       <span class="lu">${esc(user)}</span>
