@@ -39,6 +39,8 @@ The server listens at `http://127.0.0.1:8000/mcp`. The backend is the public [JS
 | AES-256-CBC encryption | Unauthenticated callers receive an encrypted blob, not readable data |
 | HMAC-SHA256 signing | Authenticated responses include a signature for tamper detection |
 | Integrity verification | Re-fetch a resource live and compare its HMAC against a saved value |
+| File integrity monitoring | SHA-256 tracks whether demo files have been tampered with |
+| File regeneration | Tampered or deleted files can be restored to original content; all files reset on server start |
 | Audit log | All access attempts (including unauthenticated ones) recorded and queryable |
 | Session management | Short-lived tokens (1 hour), revocable via logout |
 
@@ -91,7 +93,22 @@ Deletions are soft-delete only — held in memory, not sent to the backend. All 
 | `delete todo <id>` | Soft-delete a todo |
 | `restore` | Restore all soft-deleted resources to original state _(admin only)_ |
 
-### Integrity commands
+### File integrity commands (auth required)
+
+Five pre-loaded demo files simulate sensitive server data (`config.json`, `secrets.env`, `user_database.csv`, `audit_log.txt`, `encryption_keys.txt`). All files are automatically restored to their original content on every server start.
+
+| Command | Description |
+|---------|-------------|
+| `files` | List all demo files with size and integrity status (intact / TAMPERED) |
+| `file <name>` | Read a file's content with its current SHA-256 and integrity check |
+| `writefile <name> <content>` | Write/overwrite a file — simulates an attacker tampering with it |
+| `deletefile <name>` | Delete a file from the store |
+| `checkfile <name>` | Compare a file's SHA-256 against its original — reports intact or TAMPERED |
+| `scanfiles` | Scan all files and list every one that has been tampered with |
+| `repairfile <name>` | Restore a single file to its original content _(admin only)_ |
+| `resetfiles` | Restore all files to original content _(admin only)_ |
+
+### API integrity commands
 
 | Command | Description |
 |---------|-------------|
@@ -173,6 +190,14 @@ These are the tools exposed over the MCP protocol, callable by any MCP client:
 | `get_failed_auth_attempts` | `session_token` | Failed login attempts only (admin only) |
 | `list_active_sessions` | `session_token` | All live sessions with metadata (admin only) |
 | `force_logout_user` | `target_username`, `session_token` | Revoke all sessions for a user (admin only) |
+| `list_files` | `session_token` | List demo files with integrity status (auth required) |
+| `read_file` | `filename`, `session_token` | Read a file's content and integrity check (auth required) |
+| `write_file` | `filename`, `content`, `session_token` | Write/overwrite a file — simulates tampering (auth required) |
+| `delete_file` | `filename`, `session_token` | Delete a demo file (auth required) |
+| `check_file_integrity` | `filename`, `session_token` | Compare file SHA-256 to original (auth required) |
+| `detect_tampered_files` | `session_token` | Scan all files and return tampered ones (auth required) |
+| `repair_file` | `filename`, `session_token` | Restore one file to original (admin only) |
+| `reset_files` | `session_token` | Restore all files to original (admin only) |
 
 ---
 
@@ -184,6 +209,7 @@ MCP-Security-Simulation/
 ├── shell.py           # Interactive REPL client for testing the gateway
 ├── demo_client.py     # Automated 12-step demo walkthrough
 ├── backend.py         # HTTP wrapper around the JSONPlaceholder REST API
+├── filestore.py       # In-memory file store with integrity monitoring and repair
 ├── auth.py            # AuthManager — bcrypt password hashing, session tokens
 ├── crypto.py          # CryptoManager — AES-256-CBC encryption, HMAC-SHA256 signing
 ├── audit.py           # AuditLogger — circular in-memory buffer of access events
