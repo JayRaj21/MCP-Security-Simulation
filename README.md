@@ -207,14 +207,12 @@ Expected: each step is tagged Blocked, Visible, or Exposed with a one-line expla
 
 ```
 MCP-Security-Simulation/
-├── webapp.py          # FastAPI server — REST API + serves the SPA
+├── webapp.py          # FastAPI server — REST API, config, audit log, serves the SPA
 ├── static/
 │   └── index.html     # Single-page web UI (self-contained HTML/CSS/JS)
 ├── filestore.py       # In-memory file store with SHA-256 integrity monitoring
 ├── auth.py            # AuthManager — bcrypt password hashing, session tokens
 ├── crypto.py          # CryptoManager — AES-256-CBC encryption, HMAC-SHA256 signing
-├── audit.py           # AuditLogger — circular in-memory buffer of access events
-├── config.py          # User registry, encryption key, session duration
 ├── requirements.txt   # Python dependencies
 └── Makefile           # make web
 ```

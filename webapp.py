@@ -1,7 +1,6 @@
 """MCP Security Gateway — Web Application.
 
 FastAPI server providing a browser-based zero-trust file management UI.
-Uses the same security model as the MCP gateway:
   - AES-256-CBC encryption for unauthenticated callers
   - HMAC-SHA256 integrity checking on file content
   - Circular audit log of every access attempt
@@ -9,14 +8,20 @@ Uses the same security model as the MCP gateway:
 
 Quick-start
 ===========
-    make webapp            # http://127.0.0.1:8080
+    make web              # http://127.0.0.1:8080
     Credentials:  admin / admin123   |   viewer / view456
 """
 from __future__ import annotations
 
+import os
 import sys
+from collections import deque
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
+import bcrypt
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,23 +31,88 @@ import uvicorn
 sys.path.insert(0, str(Path(__file__).parent))
 
 from auth import AuthManager
-from audit import AuditLogger
 from crypto import CryptoManager
 from filestore import FileStore
-from config import USERS, ENCRYPTION_KEY, SESSION_DURATION
+
+# ---------------------------------------------------------------------------
+# Configuration (was config.py)
+# ---------------------------------------------------------------------------
+_ENCRYPTION_KEY: str = os.getenv(
+    "MCP_ENCRYPTION_KEY",
+    "mcp-v2-demo-key-change-in-prod!!",
+)
+_SESSION_DURATION: int = int(os.getenv("SESSION_DURATION_SECONDS", "3600"))
+
+def _build_users() -> Dict[str, Dict[str, Any]]:
+    raw = {
+        "admin":  os.getenv("ADMIN_PASSWORD",  "admin123"),
+        "viewer": os.getenv("VIEWER_PASSWORD", "view456"),
+    }
+    return {
+        name: {
+            "password_hash": bcrypt.hashpw(pw.encode(), bcrypt.gensalt(rounds=10)),
+            "role": "admin" if name == "admin" else "viewer",
+        }
+        for name, pw in raw.items()
+    }
+
+print("[gateway] Hashing passwords …")
+_USERS: Dict[str, Dict[str, Any]] = _build_users()
+print("[gateway] User registry ready.")
+
+# ---------------------------------------------------------------------------
+# Audit logger (was audit.py)
+# ---------------------------------------------------------------------------
+@dataclass
+class _AuditEntry:
+    timestamp: str
+    username: str
+    authenticated: bool
+    action: str
+    resource: str
+    outcome: str
+
+
+class AuditLogger:
+    """In-memory circular audit log (capacity 1 000 entries)."""
+
+    def __init__(self, capacity: int = 1000) -> None:
+        self._log: deque[_AuditEntry] = deque(maxlen=capacity)
+
+    def record(
+        self,
+        username: Optional[str],
+        authenticated: bool,
+        action: str,
+        resource: str,
+        outcome: str,
+    ) -> None:
+        self._log.append(
+            _AuditEntry(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                username=username or "anonymous",
+                authenticated=authenticated,
+                action=action,
+                resource=resource,
+                outcome=outcome,
+            )
+        )
+
+    def get_all(self) -> List[dict]:
+        return [asdict(e) for e in self._log]
 
 # ---------------------------------------------------------------------------
 # Singletons
 # ---------------------------------------------------------------------------
-_auth      = AuthManager(USERS, SESSION_DURATION)
-_crypto    = CryptoManager(ENCRYPTION_KEY)
+_auth      = AuthManager(_USERS, _SESSION_DURATION)
+_crypto    = CryptoManager(_ENCRYPTION_KEY)
 _filestore = FileStore()
 _audit     = AuditLogger()
 
 # ---------------------------------------------------------------------------
 # App / static files
 # ---------------------------------------------------------------------------
-app   = FastAPI(title="MCP Security Gateway")
+app = FastAPI(title="MCP Security Gateway")
 _STATIC = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
 
@@ -84,7 +154,7 @@ async def api_login(body: LoginBody):
             "session_token": token,
             "username": body.username,
             "role": sess["role"],
-            "expires_in": SESSION_DURATION,
+            "expires_in": _SESSION_DURATION,
         }
     _audit.record(body.username, False, "authenticate", "session", "invalid credentials")
     return JSONResponse(
@@ -106,8 +176,7 @@ async def api_logout(request: Request):
 
 # ---------------------------------------------------------------------------
 # Files — NOTE: more-specific routes (/{name}/integrity, /{name}/repair)
-#         must be declared BEFORE the generic /{name} routes so FastAPI's
-#         router resolves them correctly.
+#         must be declared BEFORE the generic /{name} routes.
 # ---------------------------------------------------------------------------
 @app.get("/api/files")
 async def api_list_files(request: Request):
