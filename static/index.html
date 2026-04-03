@@ -316,7 +316,7 @@ textarea.editor:focus { border-color: var(--accent); }
     </div>
     <div class="main-body" id="main-body">
       <div class="empty" id="empty-state">
-        <div class="icon">🔒</div>
+        <div class="icon">📂</div>
         <p>Select a file from the sidebar, or log in to access protected content.</p>
         <div class="enc-note hidden" id="enc-hint">
           AES-256-CBC encrypted — authenticate to decrypt
@@ -333,14 +333,14 @@ textarea.editor:focus { border-color: var(--accent); }
     <button id="btn-refresh-log" class="hidden" onclick="loadActivity()" title="Refresh activity log">↻</button>
   </div>
   <div id="log">
-    <div class="log-locked">🔒 Log in to view the activity log</div>
+    <div class="log-locked">Log in to view the activity log</div>
   </div>
 </div>
 
 <!-- ── Login modal ──────────────────────────────────────────────────────── -->
 <div class="overlay hidden" id="login-modal">
   <div class="modal">
-    <h2>🔒 Authenticate</h2>
+    <h2>Authenticate</h2>
     <label>Username</label>
     <input id="lu" type="text" placeholder="admin" autocomplete="username">
     <label>Password</label>
@@ -411,7 +411,7 @@ async function doLogout() {
   await api('POST', '/api/auth/logout');
   S.token = S.user = S.role = S.file = null;
   updateAuthUI(); loadFiles(); showEmpty(false);
-  document.getElementById('log').innerHTML = '<div class="log-locked">🔒 Log in to view the activity log</div>';
+  document.getElementById('log').innerHTML = '<div class="log-locked">Log in to view the activity log</div>';
   toast('Logged out', 'info');
 }
 
@@ -459,7 +459,7 @@ async function loadFiles() {
     const item = document.createElement('div');
     if (f.masked) {
       item.className = 'file-item masked';
-      item.innerHTML = `<span class="dot d-unk"></span><span class="fname">🔒 ████████████</span>`;
+      item.innerHTML = `<span class="dot d-unk"></span><span class="fname">████████████</span>`;
     } else {
       const dc = f.intact === true ? 'd-ok' : f.intact === false ? 'd-bad' : 'd-new';
       item.className = 'file-item' + (S.file === f.name ? ' active' : '');
@@ -533,7 +533,7 @@ function showEmpty(showEnc = false) {
   const body = document.getElementById('main-body');
   body.innerHTML = `
     <div class="empty" id="empty-state">
-      <div class="icon">🔒</div>
+      <div class="icon">📂</div>
       <p>Select a file from the sidebar to view its contents.</p>
       ${showEnc ? '<div class="enc-note">AES-256-CBC encrypted — authenticate to decrypt</div>' : ''}
     </div>`;
