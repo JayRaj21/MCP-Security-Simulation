@@ -15,7 +15,7 @@ Both interfaces share the same security model: every request is independently au
 
 ```bash
 # Web UI — open http://127.0.0.1:8080 in your browser  ← START HERE
-make webapp
+make web
 
 # MCP gateway (separate terminal pair)
 make server   # Terminal 1
@@ -272,7 +272,7 @@ MCP-Security-Simulation/
 ├── audit.py           # AuditLogger — circular in-memory buffer of access events
 ├── config.py          # User registry, encryption key, session duration
 ├── requirements.txt   # Python dependencies
-└── Makefile           # make webapp / make server / make shell / make demo
+└── Makefile           # make web / make server / make shell / make demo
 ```
 
 ---
