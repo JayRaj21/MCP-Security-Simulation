@@ -57,20 +57,36 @@ header {
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 button {
-  cursor: pointer; border: 1px solid #444c56;
-  background: #2d333b; color: #e6edf3;
+  cursor: pointer;
+  border: 1px solid #545d68;
+  background: linear-gradient(180deg, #373e47 0%, #2d333b 100%);
+  color: #e6edf3;
   border-radius: var(--r); padding: 6px 14px; font-size: 14px;
-  transition: background .12s, border-color .12s;
+  box-shadow: 0 1px 0 rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.04);
+  transition: background .12s, border-color .12s, box-shadow .12s;
+  user-select: none;
 }
-button:hover   { background: #373e47; border-color: #768390; }
-button:active  { background: #424a53; }
-button.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
-button.primary:hover { background: #79b8ff; border-color: #79b8ff; }
-button.danger  { color: #ff7b72; border-color: rgba(248,81,73,.5); background: rgba(248,81,73,.08); }
-button.danger:hover  { background: rgba(248,81,73,.18); border-color: #ff7b72; }
-button.ok      { color: #56d364; border-color: rgba(63,185,80,.5); background: rgba(63,185,80,.08); }
-button.ok:hover      { background: rgba(63,185,80,.18); border-color: #56d364; }
-button:disabled { opacity: .4; cursor: not-allowed; }
+button:hover {
+  background: linear-gradient(180deg, #424a53 0%, #373e47 100%);
+  border-color: #768390;
+  box-shadow: 0 1px 0 rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.06);
+}
+button:active {
+  background: #2d333b;
+  box-shadow: inset 0 1px 3px rgba(0,0,0,.4);
+  transform: translateY(1px);
+}
+button.primary {
+  background: linear-gradient(180deg, #6cb6ff 0%, #58a6ff 100%);
+  color: #0d1117; border-color: var(--accent); font-weight: 600;
+  box-shadow: 0 1px 0 rgba(0,0,0,.3), 0 0 0 1px rgba(88,166,255,.25);
+}
+button.primary:hover { background: linear-gradient(180deg, #79b8ff 0%, #6cb6ff 100%); border-color: #79b8ff; }
+button.danger  { color: #ff7b72; border-color: rgba(248,81,73,.6); background: linear-gradient(180deg, rgba(248,81,73,.12) 0%, rgba(248,81,73,.06) 100%); }
+button.danger:hover  { background: linear-gradient(180deg, rgba(248,81,73,.22) 0%, rgba(248,81,73,.12) 100%); border-color: #ff7b72; }
+button.ok      { color: #56d364; border-color: rgba(63,185,80,.6); background: linear-gradient(180deg, rgba(63,185,80,.12) 0%, rgba(63,185,80,.06) 100%); }
+button.ok:hover      { background: linear-gradient(180deg, rgba(63,185,80,.22) 0%, rgba(63,185,80,.12) 100%); border-color: #56d364; }
+button:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; transform: none; }
 .hidden { display: none !important; }
 
 /* ── Layout ──────────────────────────────────────────────────────────────── */
@@ -186,10 +202,24 @@ textarea.editor:focus { border-color: var(--accent); }
 
 /* ── Activity log ────────────────────────────────────────────────────────── */
 .activity {
-  height: 200px; min-height: 200px; flex-shrink: 0;
+  height: 200px; min-height: 80px; max-height: 70vh; flex-shrink: 0;
   border-top: 1px solid var(--border); background: var(--surface);
   display: flex; flex-direction: column;
 }
+.log-resize-handle {
+  height: 6px; flex-shrink: 0; cursor: ns-resize;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.log-resize-handle::before {
+  content: '';
+  width: 36px; height: 3px; border-radius: 2px;
+  background: var(--border);
+  transition: background .15s;
+}
+.log-resize-handle:hover::before,
+.log-resize-handle.dragging::before { background: var(--dim); }
 .activity-hdr {
   display: flex; align-items: center; gap: 8px;
   padding: 7px 16px; flex-shrink: 0;
@@ -294,8 +324,14 @@ textarea.editor:focus { border-color: var(--accent); }
   font-size: 14px; color: var(--dim);
 }
 .sim-footer p { margin-bottom: 12px; }
-button.attack-btn { color: #e3b341; border-color: rgba(210,153,34,.5); background: rgba(210,153,34,.08); }
-button.attack-btn:hover { background: rgba(210,153,34,.16); border-color: #e3b341; }
+button.attack-btn { color: #e3b341; border-color: rgba(210,153,34,.5); background: linear-gradient(180deg, rgba(210,153,34,.12) 0%, rgba(210,153,34,.06) 100%); }
+button.attack-btn:hover { background: linear-gradient(180deg, rgba(210,153,34,.2) 0%, rgba(210,153,34,.1) 100%); border-color: #e3b341; }
+button.refresh-btn {
+  color: var(--accent); border-color: rgba(88,166,255,.5);
+  background: linear-gradient(180deg, rgba(88,166,255,.12) 0%, rgba(88,166,255,.06) 100%);
+  font-size: 13px; padding: 4px 12px;
+}
+button.refresh-btn:hover { background: linear-gradient(180deg, rgba(88,166,255,.2) 0%, rgba(88,166,255,.1) 100%); border-color: var(--accent); }
 
 /* ── Toast ───────────────────────────────────────────────────────────────── */
 #toasts {
@@ -374,10 +410,11 @@ button.attack-btn:hover { background: rgba(210,153,34,.16); border-color: #e3b34
 </div>
 
 <!-- ── Activity log ─────────────────────────────────────────────────────── -->
-<div class="activity">
+<div class="activity" id="activity-panel">
+  <div class="log-resize-handle" id="log-resize-handle"></div>
   <div class="activity-hdr">
     <span class="activity-title">Activity Log</span>
-    <button id="btn-refresh-log" class="hidden" onclick="loadActivity()" title="Refresh activity log">↻</button>
+    <button id="btn-refresh-log" class="refresh-btn hidden" onclick="loadActivity()" title="Refresh activity log">↻ Refresh</button>
   </div>
   <div class="log-col-hdr" id="log-col-hdr" style="display:none">
     <span class="lt">Time</span>
@@ -940,6 +977,38 @@ async function runAttackSim() {
   }
   document.getElementById('sim-footer').classList.remove('hidden');
 }
+
+// ── Log resize ─────────────────────────────────────────────────────────────
+(function () {
+  const handle = document.getElementById('log-resize-handle');
+  const panel  = document.getElementById('activity-panel');
+  let startY, startH;
+
+  handle.addEventListener('mousedown', (e) => {
+    startY = e.clientY;
+    startH = panel.offsetHeight;
+    handle.classList.add('dragging');
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
+
+    function onMove(e) {
+      const delta = startY - e.clientY;          // drag up = bigger panel
+      const next  = Math.min(Math.max(startH + delta, 80), window.innerHeight * 0.7);
+      panel.style.height = next + 'px';
+    }
+
+    function onUp() {
+      handle.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup',   onUp);
+    }
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup',   onUp);
+  });
+})();
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 function esc(s) {
