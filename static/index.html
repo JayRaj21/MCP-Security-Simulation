@@ -119,11 +119,19 @@ button:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; transform:
 .file-item:hover { background: var(--surface2); }
 .file-item.active { background: rgba(88,166,255,.1); border-left-color: var(--accent); }
 .file-item.masked { cursor: default; color: var(--text-dim, #8b949e); font-family: var(--mono); font-size: 13px; }
-.dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-.d-ok  { background: var(--green); }
-.d-bad { background: var(--red); }
-.d-new { background: var(--yellow); }
+.dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.d-ok  { background: var(--green);  box-shadow: 0 0 5px rgba(63,185,80,.7); }
+.d-bad { background: var(--red);    box-shadow: 0 0 5px rgba(248,81,73,.8); }
+.d-new { background: var(--yellow); box-shadow: 0 0 5px rgba(210,153,34,.7); }
 .d-unk { background: var(--dim); }
+.status-pill {
+  font-size: 11px; font-weight: 600; padding: 1px 6px;
+  border-radius: 4px; white-space: nowrap; flex-shrink: 0; letter-spacing: .2px;
+}
+.sp-ok  { color: var(--green);  background: rgba(63,185,80,.12);  border: 1px solid rgba(63,185,80,.35); }
+.sp-bad { color: var(--red);    background: rgba(248,81,73,.12);  border: 1px solid rgba(248,81,73,.4); }
+.sp-new { color: var(--yellow); background: rgba(210,153,34,.1);  border: 1px solid rgba(210,153,34,.35); }
+.sp-unk { color: var(--dim);    background: transparent;          border: 1px solid var(--border); }
 .fname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-btns {
   padding: 8px 10px; border-top: 1px solid var(--border);
@@ -566,11 +574,13 @@ async function loadFiles() {
     const item = document.createElement('div');
     if (f.masked) {
       item.className = 'file-item masked';
-      item.innerHTML = `<span class="dot d-unk"></span><span class="fname">████████████</span>`;
+      item.innerHTML = `<span class="dot d-unk"></span><span class="fname">████████████</span><span class="status-pill sp-unk">?</span>`;
     } else {
-      const dc = f.intact === true ? 'd-ok' : f.intact === false ? 'd-bad' : 'd-new';
+      const dc  = f.intact === true ? 'd-ok'  : f.intact === false ? 'd-bad'  : 'd-new';
+      const sc  = f.intact === true ? 'sp-ok' : f.intact === false ? 'sp-bad' : 'sp-new';
+      const lbl = f.intact === true ? 'OK'    : f.intact === false ? 'TAMPERED' : 'New';
       item.className = 'file-item' + (S.file === f.name ? ' active' : '');
-      item.innerHTML = `<span class="dot ${dc}"></span><span class="fname">${esc(f.name)}</span>`;
+      item.innerHTML = `<span class="dot ${dc}"></span><span class="fname">${esc(f.name)}</span><span class="status-pill ${sc}">${lbl}</span>`;
       item.onclick = () => openFile(f.name);
     }
     list.appendChild(item);
