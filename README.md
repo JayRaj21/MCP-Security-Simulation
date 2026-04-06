@@ -18,12 +18,13 @@ Opens at `http://127.0.0.1:8080`. On first run (or whenever `requirements.txt` c
 
 ## Credentials
 
-| Username | Password | Role |
-|----------|----------|------|
-| `admin`  | `admin123` | Full access — can repair and reset files |
-| `viewer` | `view456`  | Read + write access, no repair/reset |
+| Username  | Password   | Tier    | Permissions |
+|-----------|------------|---------|-------------|
+| `admin`   | `admin123` | Admin   | Full access — create, edit, delete, approve, repair, reset |
+| `general` | `gen789`   | General | Edit existing files; delete unapproved files; cannot create or delete approved files |
+| `viewer`  | `view456`  | Viewer  | Read-only; approved files only |
 
-Override at runtime: `ADMIN_PASSWORD`, `VIEWER_PASSWORD`.
+Override at runtime: `ADMIN_PASSWORD`, `GENERAL_PASSWORD`, `VIEWER_PASSWORD`.
 
 ---
 
@@ -33,6 +34,8 @@ Override at runtime: `ADMIN_PASSWORD`, `VIEWER_PASSWORD`.
 |---------|-----------|
 | Zero-trust auth | Every API request independently verifies the session token |
 | AES-256-CBC encryption | Unauthenticated requests receive a ciphertext blob, not readable data |
+| Tiered access control | Three roles — Admin, General, Viewer — each with distinct permissions |
+| File approval system | New files start unapproved (only Admin/General can see them); Admin must approve before Viewers can access |
 | File integrity monitoring | SHA-256 hash of each file is compared against the original on every read |
 | File regeneration | All files auto-restore on server start; individual repair and full reset available |
 | Activity log | Every access attempt — authenticated or not — is recorded and displayed |
@@ -74,14 +77,15 @@ Override at runtime: `ADMIN_PASSWORD`, `VIEWER_PASSWORD`.
 
 | Button | Who | What it does |
 |--------|-----|-------------|
-| Select file | any | View content; integrity badge shown (✓ intact / ⚠ TAMPERED) |
-| ✏️ Edit → 💾 Save | any auth | Edit content in-browser and save |
-| 🗑 Delete | any auth | Remove file from the store |
+| Select file | any | View content; integrity badge shown next to filename (✓ intact / ⚠ TAMPERED / ◎ pending) |
+| ✏️ Edit → 💾 Save | General, Admin | Edit content in-browser and save |
+| 🗑 Delete | Admin (any); General (unapproved only) | Remove file from the store |
 | 🔍 Check | any auth | Re-hash and compare against original SHA-256 |
-| ↺ Repair | admin | Restore one file to its original content |
-| ＋ Add File | any auth | Create a new file with custom name and content |
+| ✓ Approve | Admin | Mark a pending file as approved, making it visible to all tiers |
+| ↺ Repair | Admin | Restore one file to its original content |
+| ＋ Add File | Admin | Create a new file (starts unapproved) |
 | ⚡ Scan | any auth | Scan all files and report any with hash mismatches |
-| ↺ Reset All | admin | Restore every file to original content at once |
+| ↺ Reset All | Admin | Restore every file to original content at once |
 
 ---
 
@@ -191,14 +195,15 @@ Expected: each step is tagged Blocked, Visible, or Exposed with a one-line expla
 |--------|------|------|-------------|
 | `POST` | `/api/auth/login` | — | Authenticate; returns session token |
 | `POST` | `/api/auth/logout` | required | Invalidate session |
-| `GET` | `/api/files` | optional | List files (names masked if unauthenticated) |
-| `GET` | `/api/files/{name}` | optional | Read file (encrypted if unauthenticated) |
-| `PUT` | `/api/files/{name}` | required | Write / create a file |
-| `DELETE` | `/api/files/{name}` | required | Delete a file |
+| `GET` | `/api/files` | optional | List files (names masked if unauthenticated; unapproved hidden from Viewer) |
+| `GET` | `/api/files/{name}` | optional | Read file (encrypted if unauthenticated; unapproved blocked for Viewer) |
+| `PUT` | `/api/files/{name}` | General, Admin | Write existing file (General); create or write file (Admin) |
+| `DELETE` | `/api/files/{name}` | General (unapproved only), Admin | Delete a file |
 | `GET` | `/api/files/{name}/integrity` | required | Check SHA-256 against original |
-| `POST` | `/api/files/{name}/repair` | admin | Restore one file to original |
+| `POST` | `/api/files/{name}/approve` | Admin | Approve a pending file |
+| `POST` | `/api/files/{name}/repair` | Admin | Restore one file to original |
 | `GET` | `/api/scan` | required | Scan all files for tampering |
-| `POST` | `/api/reset` | admin | Restore all files to original |
+| `POST` | `/api/reset` | Admin | Restore all files to original |
 | `GET` | `/api/activity` | required | Full activity log (most recent first) |
 
 ---
@@ -224,6 +229,7 @@ MCP-Security-Simulation/
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ADMIN_PASSWORD` | `admin123` | Password for the admin account |
+| `GENERAL_PASSWORD` | `gen789` | Password for the general account |
 | `VIEWER_PASSWORD` | `view456` | Password for the viewer account |
 | `MCP_ENCRYPTION_KEY` | `mcp-v2-demo-key-change-in-prod!!` | 32-char AES-256 key |
 | `SESSION_DURATION_SECONDS` | `3600` | Token lifetime in seconds |

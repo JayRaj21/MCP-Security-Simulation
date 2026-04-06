@@ -108,10 +108,17 @@ class FileStore:
     On instantiation (every server start) all files are reset to their
     original content, providing automatic regeneration of any tampering
     that occurred in a previous run.
+
+    Approval state
+    --------------
+    Every file carries an ``approved`` flag.  The five pre-loaded demo files
+    start as approved.  Any file created at runtime starts as *unapproved*
+    until an admin explicitly approves it.
     """
 
     def __init__(self) -> None:
         self._files: dict[str, str] = deepcopy(_ORIGINALS)
+        self._approved: dict[str, bool] = {name: True for name in _ORIGINALS}
         print("[gateway] FileStore initialised — all demo files restored to original state")
 
     # ------------------------------------------------------------------
@@ -138,6 +145,7 @@ class FileStore:
                 "size_bytes": len(content.encode()),
                 "sha256": current_sha[:16] + "…",
                 "intact": intact,
+                "approved": self._approved.get(name, False),
             })
         return result
 
@@ -158,8 +166,25 @@ class FileStore:
     # Mutation
     # ------------------------------------------------------------------
 
+    def is_approved(self, name: str) -> bool:
+        """Return True if the file exists and is approved."""
+        return self._approved.get(name, False)
+
+    def approve_file(self, name: str) -> bool:
+        """Mark a file as approved.  Returns False if the file does not exist."""
+        if name not in self._files:
+            return False
+        self._approved[name] = True
+        return True
+
     def write_file(self, name: str, content: str) -> str:
-        """Write or overwrite a file.  Returns the new SHA-256 digest."""
+        """Write or overwrite a file.  Returns the new SHA-256 digest.
+
+        New files (first write) start as *unapproved*.
+        Existing files keep their current approval state.
+        """
+        if name not in self._approved:
+            self._approved[name] = False
         self._files[name] = content
         return self._sha(content)
 
@@ -168,6 +193,7 @@ class FileStore:
         if name not in self._files:
             raise KeyError(f"File not found: '{name}'")
         del self._files[name]
+        self._approved.pop(name, None)
 
     # ------------------------------------------------------------------
     # Integrity monitoring
@@ -211,13 +237,16 @@ class FileStore:
 
         Returns True if the file was an original (and has been restored),
         False if the file is unknown (no original exists to restore from).
+        Repaired files are automatically re-approved (they are originals).
         """
         if name not in _ORIGINALS:
             return False
         self._files[name] = _ORIGINALS[name]
+        self._approved[name] = True
         return True
 
     def reset_all(self) -> list[str]:
         """Restore every file to its original content and remove any extras."""
         self._files = deepcopy(_ORIGINALS)
+        self._approved = {name: True for name in _ORIGINALS}
         return list(self._files.keys())

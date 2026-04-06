@@ -51,9 +51,10 @@ header {
   padding: 5px 13px; border-radius: 12px;
   font-size: 14px; font-weight: 500; letter-spacing: .2px;
 }
-.b-unauth { background: rgba(110,118,129,.15); color: var(--text);   border: 1px solid rgba(110,118,129,.3); }
-.b-admin  { background: rgba(88,166,255,.12);  color: var(--accent); border: 1px solid rgba(88,166,255,.3); }
-.b-viewer { background: rgba(63,185,80,.1);    color: var(--green);  border: 1px solid rgba(63,185,80,.3); }
+.b-unauth   { background: rgba(110,118,129,.15); color: var(--text);   border: 1px solid rgba(110,118,129,.3); }
+.b-admin    { background: rgba(88,166,255,.12);  color: var(--accent); border: 1px solid rgba(88,166,255,.3); }
+.b-general  { background: rgba(163,113,247,.12); color: #a371f7;       border: 1px solid rgba(163,113,247,.3); }
+.b-viewer   { background: rgba(63,185,80,.1);    color: var(--green);  border: 1px solid rgba(63,185,80,.3); }
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 button {
@@ -120,18 +121,20 @@ button:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; transform:
 .file-item.active { background: rgba(88,166,255,.1); border-left-color: var(--accent); }
 .file-item.masked { cursor: default; color: var(--text-dim, #8b949e); font-family: var(--mono); font-size: 13px; }
 .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
-.d-ok  { background: var(--green);  box-shadow: 0 0 5px rgba(63,185,80,.7); }
-.d-bad { background: var(--red);    box-shadow: 0 0 5px rgba(248,81,73,.8); }
-.d-new { background: var(--yellow); box-shadow: 0 0 5px rgba(210,153,34,.7); }
-.d-unk { background: var(--dim); }
+.d-ok   { background: var(--green);  box-shadow: 0 0 5px rgba(63,185,80,.7); }
+.d-bad  { background: var(--red);    box-shadow: 0 0 5px rgba(248,81,73,.8); }
+.d-new  { background: var(--yellow); box-shadow: 0 0 5px rgba(210,153,34,.7); }
+.d-pend { background: #a371f7;       box-shadow: 0 0 5px rgba(163,113,247,.6); }
+.d-unk  { background: var(--dim); }
 .status-pill {
   font-size: 11px; font-weight: 600; padding: 1px 6px;
   border-radius: 4px; white-space: nowrap; flex-shrink: 0; letter-spacing: .2px;
 }
-.sp-ok  { color: var(--green);  background: rgba(63,185,80,.12);  border: 1px solid rgba(63,185,80,.35); }
-.sp-bad { color: var(--red);    background: rgba(248,81,73,.12);  border: 1px solid rgba(248,81,73,.4); }
-.sp-new { color: var(--yellow); background: rgba(210,153,34,.1);  border: 1px solid rgba(210,153,34,.35); }
-.sp-unk { color: var(--dim);    background: transparent;          border: 1px solid var(--border); }
+.sp-ok   { color: var(--green);  background: rgba(63,185,80,.12);   border: 1px solid rgba(63,185,80,.35); }
+.sp-bad  { color: var(--red);    background: rgba(248,81,73,.12);   border: 1px solid rgba(248,81,73,.4); }
+.sp-new  { color: var(--yellow); background: rgba(210,153,34,.1);   border: 1px solid rgba(210,153,34,.35); }
+.sp-pend { color: #a371f7;       background: rgba(163,113,247,.1);  border: 1px solid rgba(163,113,247,.35); }
+.sp-unk  { color: var(--dim);    background: transparent;           border: 1px solid var(--border); }
 .fname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-btns {
   padding: 8px 10px; border-top: 1px solid var(--border);
@@ -148,7 +151,8 @@ button:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; transform:
   padding: 7px 16px; min-height: 44px; flex-shrink: 0;
   background: var(--surface); border-bottom: 1px solid var(--border);
 }
-#main-fname { flex: 1; font-family: var(--mono); font-size: 15px; font-weight: 600; }
+#fname-group { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
+#main-fname { font-family: var(--mono); font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ibadge {
   font-size: 12px; font-weight: 700; padding: 3px 9px;
   border-radius: 10px; letter-spacing: .3px;
@@ -381,7 +385,7 @@ button.refresh-btn:hover { background: linear-gradient(180deg, rgba(88,166,255,.
     </div>
     <div id="file-list"></div>
     <div id="sidebar-btns" class="sidebar-btns hidden">
-      <button class="ok" onclick="showAddForm()">＋ Add File</button>
+      <button id="btn-add-file" class="ok" onclick="showAddForm()">＋ Add File</button>
       <div class="btn-row">
         <button onclick="doScan()" title="Scan all files for tampering">⚡ Scan</button>
         <button id="btn-reset" class="hidden danger" onclick="doReset()" title="Restore all files to original">↺ Reset All</button>
@@ -392,13 +396,16 @@ button.refresh-btn:hover { background: linear-gradient(180deg, rgba(88,166,255,.
   <!-- Main content -->
   <main class="main">
     <div class="main-hdr">
-      <span id="main-fname">—</span>
-      <span id="main-ibadge"></span>
+      <div id="fname-group">
+        <span id="main-fname">—</span>
+        <span id="main-ibadge"></span>
+      </div>
       <div id="view-btns" class="hidden" style="display:flex;gap:6px">
         <button onclick="doCheckIntegrity()" title="Re-check SHA-256 against original">🔍 Check</button>
+        <button id="btn-approve" class="hidden ok" onclick="doApprove()" title="Approve this file">✓ Approve</button>
         <button id="btn-repair" class="hidden ok" onclick="doRepair()" title="Restore to original content">↺ Repair</button>
-        <button onclick="startEdit()">✏️ Edit</button>
-        <button class="danger" onclick="doDelete()">🗑 Delete</button>
+        <button id="btn-edit" onclick="startEdit()">✏️ Edit</button>
+        <button id="btn-delete" class="danger" onclick="doDelete()">🗑 Delete</button>
       </div>
       <div id="edit-btns" class="hidden" style="display:flex;gap:6px">
         <button class="primary" onclick="saveEdit()">💾 Save</button>
@@ -460,7 +467,7 @@ button.refresh-btn:hover { background: linear-gradient(180deg, rgba(88,166,255,.
     <p class="sim-subtitle">Simulates a malicious actor probing the gateway, brute-forcing credentials, and tampering with files. All actions are recorded in the activity log.</p>
     <div class="sim-steps" id="sim-steps"></div>
     <div class="sim-footer hidden" id="sim-footer">
-      <p>Simulation complete. Log in as <strong>admin</strong> to see the full audit trail and repair any tampered files.</p>
+      <p>Simulation complete. Log in as <strong>admin</strong> to see the full audit trail, approve pending files, and repair any tampered files.</p>
       <div class="modal-btns">
         <button class="primary" onclick="hideSim();loadActivity();loadFiles();">View Activity Log</button>
         <button onclick="hideSim()">Close</button>
@@ -473,7 +480,7 @@ button.refresh-btn:hover { background: linear-gradient(180deg, rgba(88,166,255,.
 
 <script>
 // ── State ──────────────────────────────────────────────────────────────────
-const S = { token: null, user: null, role: null, file: null };
+const S = { token: null, user: null, role: null, file: null, fileApproved: null };
 
 // ── API ────────────────────────────────────────────────────────────────────
 async function api(method, path, body) {
@@ -531,21 +538,27 @@ async function doLogout() {
 }
 
 function updateAuthUI() {
-  const badge    = document.getElementById('auth-badge');
-  const btnLogin = document.getElementById('btn-login');
-  const btnLogout= document.getElementById('btn-logout');
-  const sbtns    = document.getElementById('sidebar-btns');
-  const btnReset = document.getElementById('btn-reset');
-  const btnRefLog= document.getElementById('btn-refresh-log');
+  const badge      = document.getElementById('auth-badge');
+  const btnLogin   = document.getElementById('btn-login');
+  const btnLogout  = document.getElementById('btn-logout');
+  const sbtns      = document.getElementById('sidebar-btns');
+  const btnReset   = document.getElementById('btn-reset');
+  const btnAddFile = document.getElementById('btn-add-file');
+  const btnRefLog  = document.getElementById('btn-refresh-log');
 
   if (S.token) {
-    const cls = S.role === 'admin' ? 'b-admin' : 'b-viewer';
-    badge.className = `badge ${cls}`;
-    badge.textContent = `${S.user} · ${S.role === 'admin' ? 'Admin' : 'Viewer'}`;
+    const roleLabel = S.role === 'admin' ? 'Admin' : S.role === 'general' ? 'General' : 'Viewer';
+    const badgeCls  = S.role === 'admin' ? 'b-admin' : S.role === 'general' ? 'b-general' : 'b-viewer';
+    badge.className = `badge ${badgeCls}`;
+    badge.textContent = `${S.user} · ${roleLabel}`;
     btnLogin.classList.add('hidden');
     btnLogout.classList.remove('hidden');
     sbtns.classList.remove('hidden');
     btnRefLog.classList.remove('hidden');
+    // Add File: Admin only
+    if (S.role === 'admin') btnAddFile.classList.remove('hidden');
+    else btnAddFile.classList.add('hidden');
+    // Reset All: Admin only
     if (S.role === 'admin') btnReset.classList.remove('hidden');
     else btnReset.classList.add('hidden');
   } else {
@@ -575,6 +588,10 @@ async function loadFiles() {
     if (f.masked) {
       item.className = 'file-item masked';
       item.innerHTML = `<span class="dot d-unk"></span><span class="fname">████████████</span><span class="status-pill sp-unk">?</span>`;
+    } else if (!f.approved) {
+      item.className = 'file-item' + (S.file === f.name ? ' active' : '');
+      item.innerHTML = `<span class="dot d-pend"></span><span class="fname">${esc(f.name)}</span><span class="status-pill sp-pend">Pending</span>`;
+      item.onclick = () => openFile(f.name);
     } else {
       const dc  = f.intact === true ? 'd-ok'  : f.intact === false ? 'd-bad'  : 'd-new';
       const sc  = f.intact === true ? 'sp-ok' : f.intact === false ? 'sp-bad' : 'sp-new';
@@ -603,12 +620,15 @@ async function openFile(name) {
 
   const d = await api('GET', `/api/files/${encodeURIComponent(name)}`);
 
-  const fname  = document.getElementById('main-fname');
-  const ibadge = document.getElementById('main-ibadge');
-  const vbtns  = document.getElementById('view-btns');
-  const ebtns  = document.getElementById('edit-btns');
-  const body   = document.getElementById('main-body');
-  const bRepair= document.getElementById('btn-repair');
+  const fname   = document.getElementById('main-fname');
+  const ibadge  = document.getElementById('main-ibadge');
+  const vbtns   = document.getElementById('view-btns');
+  const ebtns   = document.getElementById('edit-btns');
+  const body    = document.getElementById('main-body');
+  const bRepair = document.getElementById('btn-repair');
+  const bApprove= document.getElementById('btn-approve');
+  const bEdit   = document.getElementById('btn-edit');
+  const bDelete = document.getElementById('btn-delete');
 
   ebtns.classList.add('hidden');
 
@@ -626,17 +646,41 @@ async function openFile(name) {
     return;
   }
 
+  S.fileApproved = d.approved !== undefined ? d.approved : true;
   fname.textContent = name;
-  // Integrity badge
+
+  // Integrity badge (next to filename)
   if (d.intact === true) {
     ibadge.innerHTML = '<span class="ibadge ib-ok">✓ intact</span>';
-    bRepair.classList.add('hidden');
   } else if (d.intact === false) {
     ibadge.innerHTML = '<span class="ibadge ib-bad">⚠ TAMPERED</span>';
-    if (S.role === 'admin') bRepair.classList.remove('hidden');
+  } else if (!S.fileApproved) {
+    ibadge.innerHTML = '<span class="ibadge ib-new">◎ pending approval</span>';
   } else {
     ibadge.innerHTML = '<span class="ibadge ib-new">◎ new file</span>';
-    bRepair.classList.add('hidden');
+  }
+
+  // Repair: Admin only, when tampered
+  if (S.role === 'admin' && d.intact === false) bRepair.classList.remove('hidden');
+  else bRepair.classList.add('hidden');
+
+  // Approve: Admin only, when unapproved
+  if (S.role === 'admin' && S.fileApproved === false) bApprove.classList.remove('hidden');
+  else bApprove.classList.add('hidden');
+
+  // Edit: General + Admin only
+  if (S.role === 'viewer') bEdit.classList.add('hidden');
+  else bEdit.classList.remove('hidden');
+
+  // Delete: General + Admin; General restricted to unapproved files only
+  if (S.role === 'viewer') {
+    bDelete.classList.add('hidden');
+  } else {
+    bDelete.classList.remove('hidden');
+    bDelete.disabled = (S.role === 'general' && S.fileApproved === true);
+    bDelete.title = (S.role === 'general' && S.fileApproved === true)
+      ? 'General role cannot delete approved files'
+      : 'Delete this file';
   }
 
   vbtns.style.display = '';
@@ -647,6 +691,7 @@ async function openFile(name) {
 }
 
 function showEmpty(showEnc = false) {
+  S.fileApproved = null;
   const body = document.getElementById('main-body');
   body.innerHTML = `
     <div class="empty" id="empty-state">
@@ -750,6 +795,13 @@ async function doRepair() {
   else toast(d.message, 'err');
 }
 
+async function doApprove() {
+  if (!S.file) return;
+  const d = await api('POST', `/api/files/${encodeURIComponent(S.file)}/approve`);
+  if (d.status === 'success') { toast(d.message, 'ok'); openFile(S.file); loadFiles(); loadActivity(); }
+  else toast(d.message, 'err');
+}
+
 async function doScan() {
   const d = await api('GET', '/api/scan');
   if (d.status === 'error') { toast(d.message, 'err'); return; }
@@ -777,6 +829,7 @@ const ACTION_LABELS = {
   create_file:      'Create File',
   delete_file:      'Delete File',
   check_integrity:  'Check Integrity',
+  approve_file:     'Approve File',
   repair_file:      'Repair File',
   scan_files:       'Scan Files',
   reset_files:      'Reset Files',
@@ -789,6 +842,7 @@ function cleanOutcome(out) {
   if (/^written/.test(out))               return 'Saved';
   if (out === 'deleted')                   return 'Deleted';
   if (out === 'restored')                  return 'Restored';
+  if (out === 'approved')                  return 'Approved';
   if (out === 'intact')                    return 'Intact';
   if (/TAMPERED/.test(out))               return 'Tampered';
   if (out === 'invalid credentials')       return 'Wrong credentials';
@@ -905,40 +959,56 @@ const ATTACK_STEPS = [
       const d = await apiAnon('POST', '/api/auth/login', { username: 'viewer', password: 'view456' });
       if (d.status === 'success') {
         ctx.viewerToken = d.session_token;
-        return { cls: 'tag-warn', tag: 'Access', detail: 'Viewer session granted — credential exposure allows partial access' };
+        return { cls: 'tag-warn', tag: 'Access', detail: 'Viewer session granted — read-only access only, no write capability' };
       }
       return { cls: 'tag-ok', tag: 'Blocked', detail: 'Login rejected' };
     },
   },
   {
-    desc: 'Tamper with secrets.env as viewer',
+    desc: 'Attempt to tamper as viewer — blocked by role',
     code: 'PUT /api/files/secrets.env  (viewer token)',
     run: async (ctx) => {
-      if (!ctx.viewerToken) return { cls: 'tag-ok', tag: 'Skipped', detail: 'Viewer login failed — nothing to tamper with' };
-      const payload = '# FILE COMPROMISED BY ATTACKER\nAWS_ACCESS_KEY_ID=ATTACKER_KEY\nAWS_SECRET_ACCESS_KEY=STOLEN\nDATABASE_URL=exfiltrated\n';
+      if (!ctx.viewerToken) return { cls: 'tag-ok', tag: 'Skipped', detail: 'Viewer login failed' };
+      const payload = '# FILE COMPROMISED BY ATTACKER\nAWS_ACCESS_KEY_ID=ATTACKER_KEY\n';
       const d = await apiAs(ctx.viewerToken, 'PUT', '/api/files/secrets.env', { content: payload });
+      return d.status === 'error'
+        ? { cls: 'tag-ok',  tag: 'Blocked', detail: 'Write rejected — viewer role is read-only (tiered access control)' }
+        : { cls: 'tag-bad', tag: 'Exposed', detail: 'Unexpected: viewer was able to write' };
+    },
+  },
+  {
+    desc: 'Escalate to general credentials — tamper file',
+    code: 'POST /api/auth/login (general) + PUT /api/files/secrets.env',
+    run: async (ctx) => {
+      const ld = await apiAnon('POST', '/api/auth/login', { username: 'general', password: 'gen789' });
+      if (ld.status !== 'success') return { cls: 'tag-ok', tag: 'Blocked', detail: 'General login failed' };
+      ctx.generalToken = ld.session_token;
+      const payload = '# FILE COMPROMISED BY ATTACKER\nAWS_ACCESS_KEY_ID=ATTACKER_KEY\nAWS_SECRET_ACCESS_KEY=STOLEN\nDATABASE_URL=exfiltrated\n';
+      const d = await apiAs(ctx.generalToken, 'PUT', '/api/files/secrets.env', { content: payload });
       return d.status === 'success'
-        ? { cls: 'tag-warn', tag: 'Tampered', detail: 'File overwritten — integrity hash now mismatches original' }
+        ? { cls: 'tag-warn', tag: 'Tampered', detail: 'File overwritten using general credentials — integrity hash mismatches original' }
         : { cls: 'tag-ok',   tag: 'Blocked',  detail: 'Write rejected by server' };
     },
   },
   {
-    desc: 'Attempt to view audit log as viewer',
-    code: 'GET /api/activity  (viewer token)',
+    desc: 'Attempt to view audit log as general',
+    code: 'GET /api/activity  (general token)',
     run: async (ctx) => {
-      if (!ctx.viewerToken) return { cls: 'tag-ok', tag: 'Skipped', detail: 'No viewer session' };
-      const d = await apiAs(ctx.viewerToken, 'GET', '/api/activity');
+      const token = ctx.generalToken || ctx.viewerToken;
+      if (!token) return { cls: 'tag-ok', tag: 'Skipped', detail: 'No active session' };
+      const d = await apiAs(token, 'GET', '/api/activity');
       return d.status === 'success'
-        ? { cls: 'tag-warn', tag: 'Visible', detail: `Attacker can see ${d.entries?.length ?? 0} audit entries — consider restricting to admin` }
+        ? { cls: 'tag-warn', tag: 'Visible', detail: `Attacker can read ${d.entries?.length ?? 0} audit entries — log is visible to all tiers` }
         : { cls: 'tag-ok',   tag: 'Blocked', detail: 'Audit log access denied' };
     },
   },
   {
-    desc: 'Viewer session invalidated',
-    code: 'POST /api/auth/logout  (viewer token)',
+    desc: 'All attacker sessions invalidated',
+    code: 'POST /api/auth/logout  (viewer + general tokens)',
     run: async (ctx) => {
-      if (ctx.viewerToken) await apiAs(ctx.viewerToken, 'POST', '/api/auth/logout');
-      return { cls: 'tag-ok', tag: 'Done', detail: 'Session closed — attack sequence complete' };
+      if (ctx.viewerToken)  await apiAs(ctx.viewerToken,  'POST', '/api/auth/logout');
+      if (ctx.generalToken) await apiAs(ctx.generalToken, 'POST', '/api/auth/logout');
+      return { cls: 'tag-ok', tag: 'Done', detail: 'Both sessions closed — attack sequence complete' };
     },
   },
 ];

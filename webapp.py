@@ -9,7 +9,7 @@ FastAPI server providing a browser-based zero-trust file management UI.
 Quick-start
 ===========
     make web              # http://127.0.0.1:8080
-    Credentials:  admin / admin123   |   viewer / view456
+    Credentials:  admin / admin123   |   general / gen789   |   viewer / view456
 """
 from __future__ import annotations
 
@@ -45,13 +45,15 @@ _SESSION_DURATION: int = int(os.getenv("SESSION_DURATION_SECONDS", "3600"))
 
 def _build_users() -> Dict[str, Dict[str, Any]]:
     raw = {
-        "admin":  os.getenv("ADMIN_PASSWORD",  "admin123"),
-        "viewer": os.getenv("VIEWER_PASSWORD", "view456"),
+        "admin":   os.getenv("ADMIN_PASSWORD",   "admin123"),
+        "general": os.getenv("GENERAL_PASSWORD", "gen789"),
+        "viewer":  os.getenv("VIEWER_PASSWORD",  "view456"),
     }
+    role_map = {"admin": "admin", "general": "general", "viewer": "viewer"}
     return {
         name: {
             "password_hash": bcrypt.hashpw(pw.encode(), bcrypt.gensalt(rounds=10)),
-            "role": "admin" if name == "admin" else "viewer",
+            "role": role_map[name],
         }
         for name, pw in raw.items()
     }
@@ -182,19 +184,25 @@ async def api_logout(request: Request):
 async def api_list_files(request: Request):
     sess = _session(request)
     username = sess["username"] if sess else None
-    files = _filestore.list_files()
+    role = sess["role"] if sess else None
+    all_files = _filestore.list_files()
+
+    # Viewer and unauthenticated callers only see approved files.
+    approved_files = [f for f in all_files if f.get("approved", True)]
+    visible = all_files if role in ("admin", "general") else approved_files
+
     _audit.record(username, sess is not None, "list_files", "filestore",
-                  f"success ({len(files)} files)")
+                  f"success ({len(visible)} files)")
     if not sess:
         return {
             "authenticated": False,
-            "count": len(files),
+            "count": len(approved_files),
             "files": [
                 {"name": f"file-{i + 1}", "masked": True, "size_bytes": f["size_bytes"]}
-                for i, f in enumerate(files)
+                for i, f in enumerate(approved_files)
             ],
         }
-    return {"authenticated": True, "count": len(files), "files": files}
+    return {"authenticated": True, "count": len(visible), "files": visible}
 
 
 @app.get("/api/files/{name}/integrity")
@@ -204,6 +212,9 @@ async def api_check_integrity(name: str, request: Request):
         _audit.record(None, False, "check_integrity", f"filestore/{name}",
                       "denied — not authenticated")
         return JSONResponse({"status": "error", "message": "Authentication required."}, status_code=401)
+    # Viewer cannot access unapproved files (404 to avoid information disclosure)
+    if sess["role"] == "viewer" and not _filestore.is_approved(name):
+        return JSONResponse({"status": "error", "message": f"File not found: '{name}'"}, status_code=404)
     try:
         result = _filestore.check_integrity(name)
     except KeyError as e:
@@ -213,6 +224,26 @@ async def api_check_integrity(name: str, request: Request):
                else "new file")
     _audit.record(sess["username"], True, "check_integrity", f"filestore/{name}", verdict)
     return {"status": "success", "filename": name, "verdict": verdict, **result}
+
+
+@app.post("/api/files/{name}/approve")
+async def api_approve_file(name: str, request: Request):
+    sess = _session(request)
+    if not sess:
+        _audit.record(None, False, "approve_file", f"filestore/{name}",
+                      "denied — not authenticated")
+        return JSONResponse({"status": "error", "message": "Authentication required."}, status_code=401)
+    if sess["role"] != "admin":
+        _audit.record(sess["username"], True, "approve_file", f"filestore/{name}",
+                      "denied — admin only")
+        return JSONResponse({"status": "error", "message": "Admin role required."}, status_code=403)
+    if not _filestore.approve_file(name):
+        return JSONResponse(
+            {"status": "error", "message": f"File not found: '{name}'."},
+            status_code=404,
+        )
+    _audit.record(sess["username"], True, "approve_file", f"filestore/{name}", "approved")
+    return {"status": "success", "message": f"'{name}' approved."}
 
 
 @app.post("/api/files/{name}/repair")
@@ -239,6 +270,14 @@ async def api_repair_file(name: str, request: Request):
 async def api_read_file(name: str, request: Request):
     sess = _session(request)
     username = sess["username"] if sess else None
+    role = sess["role"] if sess else None
+
+    # Viewer cannot access unapproved files (404 to avoid information disclosure).
+    if role == "viewer" and not _filestore.is_approved(name):
+        _audit.record(username, True, "read_file", f"filestore/{name}",
+                      "denied — unapproved file")
+        return JSONResponse({"status": "error", "message": f"File not found: '{name}'"}, status_code=404)
+
     try:
         content, sha = _filestore.read_file(name)
         integrity = _filestore.check_integrity(name)
@@ -259,6 +298,7 @@ async def api_read_file(name: str, request: Request):
         "content": content,
         "sha256": sha,
         "intact": integrity["intact"],
+        "approved": _filestore.is_approved(name),
     }
 
 
@@ -273,6 +313,15 @@ async def api_write_file(name: str, body: WriteBody, request: Request):
         _audit.record(None, False, "write_file", f"filestore/{name}",
                       "denied — not authenticated")
         return JSONResponse({"status": "error", "message": "Authentication required."}, status_code=401)
+    role = sess["role"]
+    if role == "viewer":
+        _audit.record(sess["username"], True, "write_file", f"filestore/{name}",
+                      "denied — viewer role is read-only")
+        return JSONResponse({"status": "error", "message": "Viewer role is read-only."}, status_code=403)
+    if role == "general" and not _filestore.file_exists(name):
+        _audit.record(sess["username"], True, "write_file", f"filestore/{name}",
+                      "denied — general role cannot create files")
+        return JSONResponse({"status": "error", "message": "General role cannot create files."}, status_code=403)
     new_sha = _filestore.write_file(name, body.content)
     _audit.record(sess["username"], True, "write_file", f"filestore/{name}",
                   f"written — sha={new_sha[:16]}…")
@@ -286,6 +335,18 @@ async def api_delete_file(name: str, request: Request):
         _audit.record(None, False, "delete_file", f"filestore/{name}",
                       "denied — not authenticated")
         return JSONResponse({"status": "error", "message": "Authentication required."}, status_code=401)
+    role = sess["role"]
+    if role == "viewer":
+        _audit.record(sess["username"], True, "delete_file", f"filestore/{name}",
+                      "denied — viewer role is read-only")
+        return JSONResponse({"status": "error", "message": "Viewer role is read-only."}, status_code=403)
+    if role == "general" and _filestore.is_approved(name):
+        _audit.record(sess["username"], True, "delete_file", f"filestore/{name}",
+                      "denied — general role cannot delete approved files")
+        return JSONResponse(
+            {"status": "error", "message": "General role cannot delete approved files."},
+            status_code=403,
+        )
     try:
         _filestore.delete_file(name)
     except KeyError as e:
@@ -356,5 +417,5 @@ if __name__ == "__main__":
 
     print(f"[gateway] Web UI      →  http://{args.host}:{args.port}")
     print("[gateway] FileStore   →  5 demo files (auto-restored on start)")
-    print("[gateway] Credentials →  admin/admin123  |  viewer/view456")
+    print("[gateway] Credentials →  admin/admin123  |  general/gen789  |  viewer/view456")
     uvicorn.run(app, host=args.host, port=args.port)
