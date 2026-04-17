@@ -1,113 +1,235 @@
-# MCP Security Simulation
+# MCP Security Gateway — Web UI
 
-An interactive demonstration of file integrity vulnerabilities and HMAC-SHA256 protection. You play the role of a malicious agent trying to read, modify, and destroy sensitive MCP server files — and can toggle the security layer on and off at any time to see the difference.
-
-## Quick Start
-
-**Prerequisites:** Python 3.8 or newer. No other tools needed.
-
-```bash
-# Clone the repo
-git clone https://github.com/JayRaj21/MCP-Security-Simulation.git
-cd MCP-Security-Simulation
-
-# Start with security OFF (files unprotected)
-python3 run.py
-
-# Start with security ON (files HMAC-sealed)
-python3 run.py --security
-```
-
-> **Windows users:** replace `python3` with `python` in all commands.
-
-`run.py` handles everything automatically — it creates a virtual environment and installs dependencies on first run. No manual setup required.
-
-**Toggle security at any time** using the `toggle` command inside the session — no need to restart.
+A browser-based zero-trust file management dashboard. Every request is independently authenticated. Unauthenticated users see the file list but not file names or content — all data is AES-256-CBC encrypted until you log in. Every access attempt is recorded in a live activity log.
 
 ---
 
-## What this demonstrates
+## Quick Start
 
-MCP server files (configs, credentials, logs) have no built-in integrity protection. A local attacker can freely read, modify, or delete them. The security layer uses **HMAC-SHA256** to seal each file with a cryptographic signature. Any attempt to write or delete a sealed file is rejected — the same mechanism used to protect network messages in MCP.
+**Prerequisites:** Python 3.8+
 
-### Key limitation
+```bash
+make web
+```
 
-HMAC signing guarantees **integrity** (tampering is blocked) but not **confidentiality** (files can still be read). This is visible in the demo — `read` always works regardless of security state. Encryption would be needed for confidentiality.
+Opens at `http://127.0.0.1:8080`. On first run (or whenever `requirements.txt` changes) the Makefile installs all dependencies automatically — no manual `pip install` needed.
 
-## Commands
+---
 
-| Command | Description |
-|---------|-------------|
-| `list` | Show all test files and their integrity status |
-| `read <file>` | Print a file's contents to screen |
-| `modify <file> <content>` | Overwrite a file entirely |
-| `append <file> <content>` | Add a line to the end of a file |
-| `delete <file>` | Delete a file from disk |
-| `toggle` | Switch security on or off |
-| `status` | Show security mode and HMAC seal status per file |
-| `help` | Show all commands and attack ideas |
-| `exit` | Quit |
+## Credentials
 
-## Test files
+| Username  | Password   | Tier    | Permissions |
+|-----------|------------|---------|-------------|
+| `admin`   | `admin123` | Admin   | Full access — create, edit, delete, approve, repair, reset |
+| `general` | `gen789`   | General | Edit existing files; delete unapproved files; cannot create or delete approved files |
+| `viewer`  | `view456`  | Viewer  | Read-only; approved files only |
 
-Created automatically in `test_files/` and restored on every startup:
+Override at runtime: `ADMIN_PASSWORD`, `GENERAL_PASSWORD`, `VIEWER_PASSWORD`.
+
+---
+
+## Security features
+
+| Feature | Behaviour |
+|---------|-----------|
+| Zero-trust auth | Every API request independently verifies the session token |
+| AES-256-CBC encryption | Unauthenticated requests receive a ciphertext blob, not readable data |
+| Tiered access control | Three roles — Admin, General, Viewer — each with distinct permissions |
+| File approval system | New files start unapproved (only Admin/General can see them); Admin must approve before Viewers can access |
+| File integrity monitoring | SHA-256 hash of each file is compared against the original on every read |
+| File regeneration | All files auto-restore on server start; individual repair and full reset available |
+| Activity log | Every access attempt — authenticated or not — is recorded and displayed |
+| Session tokens | 256-bit random tokens, server-side only, 1-hour expiry |
+
+---
+
+## UI overview
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  MCP Security Gateway              [● admin (admin)] [Logout]  │
+├──────────────────┬─────────────────────────────────────────────┤
+│  FILE STORE  5   │  secrets.env              [⚠ TAMPERED]      │
+│  ─────────────   │  ─────────────────────────────────────────  │
+│  ● config.json   │  DATABASE_URL=postgresql://...              │
+│  ⚠ secrets.env   │  AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE     │
+│  ● user_db.csv   │  ...                                        │
+│  ● audit.txt     │           [🔍 Check] [↺ Repair] [🗑 Delete]  │
+│  ● enc_keys.txt  │                                             │
+│  ─────────────   │                                             │
+│  [＋ Add File]   │                                             │
+│  [⚡ Scan] [↺ Reset All]                                        │
+├──────────────────┴─────────────────────────────────────────────┤
+│  ACTIVITY LOG                                         [↻]      │
+│  14:05:22  admin  write_file  filestore/secrets  written…      │
+│  14:05:10  admin  list_files  filestore          success…      │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### What unauthenticated users see
+
+- File count is visible in the sidebar header
+- File names are masked (`████████████`) — count reveals files exist, nothing more
+- Clicking any file shows the AES-256 encrypted blob, not the content
+- Activity log is hidden entirely
+
+### File actions
+
+| Button | Who | What it does |
+|--------|-----|-------------|
+| Select file | any | View content; integrity badge shown next to filename (✓ intact / ⚠ TAMPERED / ◎ pending) |
+| ✏️ Edit → 💾 Save | General, Admin | Edit content in-browser and save |
+| 🗑 Delete | Admin (any); General (unapproved only) | Remove file from the store |
+| 🔍 Check | any auth | Re-hash and compare against original SHA-256 |
+| ✓ Approve | Admin | Mark a pending file as approved, making it visible to all tiers |
+| ↺ Repair | Admin | Restore one file to its original content |
+| ＋ Add File | Admin | Create a new file (starts unapproved) |
+| ⚡ Scan | any auth | Scan all files and report any with hash mismatches |
+| ↺ Reset All | Admin | Restore every file to original content at once |
+
+---
+
+## Demo files
+
+Five pre-populated files simulate sensitive server data. All are **automatically restored on every server start**.
 
 | File | Contents |
-|------|----------|
-| `config.json` | Server config with API keys and database credentials |
-| `user_database.csv` | User records, roles, and API tokens |
-| `secrets.env` | Production credentials and encryption keys |
-| `audit_log.txt` | Access and transaction audit log |
+|------|---------|
+| `config.json` | Server config with database credentials and API keys |
+| `secrets.env` | Environment variables including AWS keys and OAuth secrets |
+| `user_database.csv` | User records with password hashes and API tokens |
+| `audit_log.txt` | Historical access log with a brute-force attempt example |
+| `encryption_keys.txt` | Key rotation schedule with AES-256-GCM and break-glass key |
 
-Any files deleted or modified in a previous session are automatically restored when the program starts again.
+---
 
-## How security works
+## Testing
 
-When security is **ON**, each file gets a `.sig` file containing an HMAC-SHA256 hash of its content, computed with a shared secret key:
+### Running the server
 
+```bash
+make web
+# Server starts at http://127.0.0.1:8080
 ```
-signature = HMAC-SHA256(shared_secret, file_content)
-```
 
-Any `modify`, `append`, or `delete` command is blocked before touching the filesystem. The attacker cannot forge a valid signature without the secret key.
+All state is in memory. Restarting the server resets every file to its original content and clears the session and activity log.
 
-When security is **OFF**, the `.sig` files are removed and all operations proceed freely.
+### Manual test cases
 
-## Example session
+**1. Encryption — verify unauthenticated access is blocked**
 
-```
-[ATTACKER | INSECURE] > delete user_database.csv
-  [DELETED] 'user_database.csv' removed from disk.
+1. Open `http://127.0.0.1:8080` without logging in
+2. Sidebar shows 5 files with masked names (`████████████`)
+3. Click any masked entry — the main panel shows the AES-256 ciphertext blob
+4. Log in as `viewer` / `view456`
+5. File names and content are now visible in plaintext
 
-[ATTACKER | INSECURE] > toggle
-  Security ON — HMAC-SHA256 seals applied.
-    ✓ config.json
-    ✓ secrets.env
-    ✓ audit_log.txt
+Expected: unauthenticated users cannot read any file content.
 
-[ATTACKER | SECURE] > delete user_database.csv
-  [BLOCKED] Cannot delete 'user_database.csv'.
-  The file is sealed with HMAC-SHA256.
-  Deletion requires the shared secret key — which you don't have.
+---
 
-[ATTACKER | SECURE] > read secrets.env
-  # Production credentials — DO NOT SHARE
-  JWT_SECRET=8f14e45fceea167a5a36dedd4bea2543
-  ...
-  (read succeeds — signing prevents tampering, not eavesdropping)
-```
+**2. File integrity — detect and repair tampering**
+
+1. Log in as `admin` / `admin123`
+2. Select `secrets.env` — integrity badge shows **✓ intact**
+3. Click **✏️ Edit**, change a line (e.g. append ` # TAMPERED`), click **💾 Save**
+4. Integrity badge immediately changes to **⚠ TAMPERED**; sidebar dot turns red
+5. Click **🔍 Check** — confirms hash mismatch with original SHA-256
+6. Click **↺ Repair** — file content restored; badge returns to **✓ intact**
+
+Expected: any modification is detected by SHA-256 comparison; admin can repair individual files.
+
+---
+
+**3. Bulk scan and reset**
+
+1. Log in as `admin`
+2. Edit `config.json` and `audit_log.txt` (change any content, save each)
+3. Click **⚡ Scan** — toast reports "2 tampered: config.json, audit_log.txt"
+4. Click **↺ Reset All** and confirm — toast reports all 5 files restored
+
+Expected: scan identifies all modified files; reset restores everything in one action.
+
+---
+
+**4. Access control — viewer cannot repair**
+
+1. Log in as `viewer` / `view456`
+2. Edit any file so it shows **⚠ TAMPERED**
+3. The **↺ Repair** button is not visible; **↺ Reset All** button is not shown in the sidebar
+
+Expected: repair and reset are restricted to the admin role.
+
+---
+
+**5. Activity log — audit trail**
+
+1. Open the page without logging in and click a few masked file entries
+2. Log in as `admin`
+3. The activity log shows the earlier unauthenticated attempts, tagged `[UNAUTH]`
+
+Expected: all access attempts are logged regardless of authentication state.
+
+---
+
+**6. Attack simulation — automated attacker scenario**
+
+1. Click **⚡ Simulate Attack** in the header (no login required)
+2. The panel runs 7 steps automatically:
+   - Unauthenticated file list → **Blocked** (masked names only)
+   - Unauthenticated file read → **Blocked** (AES-256 ciphertext)
+   - Brute-force login with wrong passwords → **Blocked**
+   - Viewer login with correct credentials → **Visible** (token obtained)
+   - File tamper as viewer → **Visible** (viewer can write)
+   - Audit log read as viewer → **Visible** (viewer can see log)
+   - Viewer logout → token invalidated
+3. After the run, click **View Activity Log** to see every step recorded in the audit trail
+
+Expected: each step is tagged Blocked, Visible, or Exposed with a one-line explanation; the full scenario is captured in the activity log.
+
+---
+
+## Web API
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/auth/login` | — | Authenticate; returns session token |
+| `POST` | `/api/auth/logout` | required | Invalidate session |
+| `GET` | `/api/files` | optional | List files (names masked if unauthenticated; unapproved hidden from Viewer) |
+| `GET` | `/api/files/{name}` | optional | Read file (encrypted if unauthenticated; unapproved blocked for Viewer) |
+| `PUT` | `/api/files/{name}` | General, Admin | Write existing file (General); create or write file (Admin) |
+| `DELETE` | `/api/files/{name}` | General (unapproved only), Admin | Delete a file |
+| `GET` | `/api/files/{name}/integrity` | required | Check SHA-256 against original |
+| `POST` | `/api/files/{name}/approve` | Admin | Approve a pending file |
+| `POST` | `/api/files/{name}/repair` | Admin | Restore one file to original |
+| `GET` | `/api/scan` | required | Scan all files for tampering |
+| `POST` | `/api/reset` | Admin | Restore all files to original |
+| `GET` | `/api/activity` | required | Full activity log (most recent first) |
+
+---
 
 ## Project structure
 
 ```
 MCP-Security-Simulation/
-├── run.py           # One-command launcher (handles venv + deps automatically)
-├── demo.py          # Entry point — argument parsing
-├── file_agent.py    # Interactive REPL and file integrity logic
-├── security.py      # HMAC-SHA256 signing and verification
-├── test_files/      # Auto-created — the files you try to attack
-├── mcp_server.py    # Reference: simulated MCP server (educational)
-├── mitm_proxy.py    # Reference: malicious MITM proxy (educational)
-├── mcp_client.py    # Reference: MCP client library (educational)
-└── requirements.txt
+├── webapp.py          # FastAPI server — REST API, config, audit log, serves the SPA
+├── static/
+│   └── index.html     # Single-page web UI (self-contained HTML/CSS/JS)
+├── filestore.py       # In-memory file store with SHA-256 integrity monitoring
+├── auth.py            # AuthManager — bcrypt password hashing, session tokens
+├── crypto.py          # CryptoManager — AES-256-CBC encryption, HMAC-SHA256 signing
+├── requirements.txt   # Python dependencies
+└── Makefile           # make web
 ```
+
+---
+
+## Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ADMIN_PASSWORD` | `admin123` | Password for the admin account |
+| `GENERAL_PASSWORD` | `gen789` | Password for the general account |
+| `VIEWER_PASSWORD` | `view456` | Password for the viewer account |
+| `MCP_ENCRYPTION_KEY` | `mcp-v2-demo-key-change-in-prod!!` | 32-char AES-256 key |
+| `SESSION_DURATION_SECONDS` | `3600` | Token lifetime in seconds |
